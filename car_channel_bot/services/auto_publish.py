@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import structlog
 
+from car_channel_bot.config.settings import Settings
 from car_channel_bot.db.repositories import Database
 from car_channel_bot.services.publisher import ChannelPublisher
 from car_channel_bot.services.text_sanitize import caption_without_urls
@@ -39,11 +41,13 @@ async def publish_auto_items(
     db: Database,
     items: list[dict[str, Any]],
     admin_id: int,
+    settings: Settings,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Публикует подряд; при ошибке одного объявления кладёт его в failed и идёт дальше."""
     count = 0
     failed_items: list[dict[str, Any]] = []
-    for it in items:
+    n_items = len(items)
+    for idx, it in enumerate(items):
         try:
             await publish_one_auto_item(
                 publisher=publisher,
@@ -52,6 +56,8 @@ async def publish_auto_items(
                 item=it,
             )
             count += 1
+            if idx + 1 < n_items:
+                await asyncio.sleep(settings.channel_post_cooldown_seconds)
         except Exception as e:
             failed_items.append(it)
             log.exception(

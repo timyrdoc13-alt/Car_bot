@@ -75,6 +75,8 @@ chmod 600 .env
 
 Для контейнера бота путь к базе задаётся в [docker-compose.yml](docker-compose.yml) (`DATABASE_PATH=/app/data/bot.db`). Значение `DATABASE_PATH` в `.env` для режима Docker **перекрывается** переменной окружения сервиса `bot`; остальные ключи (`BOT_TOKEN`, `CHANNEL_ID`, `ADMIN_IDS`, LLM, `LISTING_SOURCE` и т.д.) читаются из `.env`.
 
+Чтобы реже ловить **Flood control** при пакетной публикации альбомов, задайте `CHANNEL_POST_COOLDOWN_SECONDS` (пауза между постами). Лимиты фото: `CHANNEL_GALLERY_MAX_PHOTOS` / `CHANNEL_GALLERY_MIN_PHOTOS` — см. [.env.example](.env.example). Водяные знаки на снимках LLM не убирает; нужна отдельная обработка изображений (не входит в бот).
+
 ## 3. Запуск только бота
 
 Сборка и фоновый запуск:

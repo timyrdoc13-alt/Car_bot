@@ -10,6 +10,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 
 from car_channel_bot.bot.keyboards import auto_batch_summary_kb, auto_item_kb
+from car_channel_bot.services.listing_images import sanitize_vehicle_image_urls
 from car_channel_bot.services.publisher import fetch_listing_images
 from car_channel_bot.services.text_sanitize import caption_without_urls
 
@@ -41,6 +42,7 @@ async def send_auto_batch_previews_to_admin(
     items: list[dict[str, Any]],
     *,
     intro_prefix: str = "",
+    gallery_max_photos: int = 6,
 ) -> None:
     n = len(items)
     intro = (
@@ -56,7 +58,11 @@ async def send_auto_batch_previews_to_admin(
     for it in items:
         cap = preview_caption(it.get("caption") or "")
         kb = auto_item_kb(batch_id, str(it["item_key"]))
-        urls = it.get("image_urls") or []
+        raw_urls = it.get("image_urls") or []
+        urls = sanitize_vehicle_image_urls(
+            list(raw_urls) if isinstance(raw_urls, list) else [],
+            max_photos=max(1, min(10, gallery_max_photos)),
+        )
         try:
             files = await fetch_listing_images(urls, limit=1)
             if files:

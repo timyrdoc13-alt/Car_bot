@@ -162,6 +162,7 @@ async def auto_limit(
             message.chat.id,
             batch_id,
             keyed,
+            gallery_max_photos=settings.channel_gallery_max_photos,
         )
 
 
@@ -172,6 +173,7 @@ async def auto_approve_all(
     cb: CallbackQuery,
     db: Database,
     publisher,
+    settings: Settings,
 ) -> None:
     data = cb.data or ""
     if data.startswith("auto:all:"):
@@ -189,16 +191,22 @@ async def auto_approve_all(
     if not items:
         await cb.answer("В пакете нечего публиковать.", show_alert=True)
         return
+    await cb.answer("Публикую в канал, подождите…")
     try:
         n, failed = await publish_auto_items(
             publisher=publisher,
             db=db,
             items=items,
             admin_id=cb.from_user.id,
+            settings=settings,
         )
     except Exception:
         log.exception("auto_approve_all_fatal")
-        await cb.answer("Ошибка публикации. Проверьте права бота в канале и логи.", show_alert=True)
+        if cb.message:
+            await cb.message.answer(
+                "Ошибка публикации. Проверьте права бота в канале и логи.",
+                reply_markup=main_menu_kb(),
+            )
         return
     if failed:
         await db.update_auto_batch_items(batch_id, failed)
@@ -216,7 +224,6 @@ async def auto_approve_all(
         else:
             msg = f"Опубликовано в канал: {n}."
         await cb.message.answer(msg, reply_markup=main_menu_kb())
-    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("auto:yes:"))
@@ -242,6 +249,7 @@ async def auto_approve_one(cb: CallbackQuery, db: Database, publisher) -> None:
     if not chosen:
         await cb.answer("Объявление уже убрано из пакета.", show_alert=True)
         return
+    await cb.answer("Публикую…")
     try:
         await publish_one_auto_item(
             publisher=publisher,
@@ -251,7 +259,10 @@ async def auto_approve_one(cb: CallbackQuery, db: Database, publisher) -> None:
         )
     except Exception:
         log.exception("auto_approve_one_failed", url=(chosen.get("url") or "")[:120])
-        await cb.answer("Не удалось опубликовать (канал / фото). См. логи.", show_alert=True)
+        if cb.message:
+            await cb.message.answer(
+                "Не удалось опубликовать (канал / фото). См. логи.",
+            )
         return
     if rest:
         await db.update_auto_batch_items(batch_id, rest)
@@ -260,7 +271,7 @@ async def auto_approve_one(cb: CallbackQuery, db: Database, publisher) -> None:
         await db.update_auto_batch_status(batch_id, "published")
     if cb.message:
         await cb.message.edit_reply_markup(reply_markup=None)
-    await cb.answer("Опубликовано")
+        await cb.message.answer("Опубликовано.")
 
 
 @router.callback_query(F.data.startswith("auto:skip:"))

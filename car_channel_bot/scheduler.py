@@ -71,6 +71,7 @@ def setup_scheduler(_bot: Bot, dp: Dispatcher, settings: Settings) -> AsyncIOSch
                 batch_id,
                 keyed,
                 intro_prefix="⏰ Автопостинг по расписанию\n",
+                gallery_max_photos=settings.channel_gallery_max_photos,
             )
         except Exception as e:
             log.error(

@@ -27,7 +27,7 @@ def build_dispatcher(
     llm = LLMService(settings)
 
     def publisher_factory() -> ChannelPublisher:
-        return ChannelPublisher(bot, settings.channel_id)
+        return ChannelPublisher(bot, settings.channel_id, settings)
 
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.outer_middleware(

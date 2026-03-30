@@ -1,7 +1,7 @@
 import re
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -110,6 +110,33 @@ class Settings(BaseSettings):
         ge=0.5,
         description="Пауза Playwright для Mashina.kg (сек)",
     )
+
+    channel_gallery_min_photos: int = Field(
+        default=4,
+        ge=1,
+        le=10,
+        description="Желаемый минимум фото в посте (если в объявлении меньше — публикуем сколько есть)",
+    )
+    channel_gallery_max_photos: int = Field(
+        default=6,
+        ge=1,
+        le=10,
+        description="Максимум фото в одном посте канала (после фильтра мусорных URL)",
+    )
+    channel_post_cooldown_seconds: float = Field(
+        default=4.0,
+        ge=0.5,
+        le=120.0,
+        description="Пауза между публикациями в канал (снижает Flood control Telegram)",
+    )
+
+    @model_validator(mode="after")
+    def _gallery_min_max(self) -> "Settings":
+        if self.channel_gallery_max_photos < self.channel_gallery_min_photos:
+            raise ValueError(
+                "channel_gallery_max_photos must be >= channel_gallery_min_photos",
+            )
+        return self
 
     @field_validator("admin_ids", mode="before")
     @classmethod
