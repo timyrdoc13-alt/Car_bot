@@ -8,6 +8,26 @@
 - SSH-доступ под `root` или пользователем с `sudo`.
 - Файл **`.env`** с секретами (не коммитить). Образец: [.env.example](.env.example).
 
+## 0. Последовательность на сервере (кратко)
+
+Репозиторий: `https://github.com/timyrdoc13-alt/Car_bot.git` (каталог после клона обычно **`Car_bot`**).
+
+1. Установите **Docker** — раздел **«1. Установка Docker»** ниже (от `root` можно без `sudo`).
+2. Если раньше клон падал и папка битая: `rm -rf ~/Car_bot`
+3. Клон (публичный репозиторий — **без токена**):
+   ```bash
+   cd ~
+   git clone https://github.com/timyrdoc13-alt/Car_bot.git
+   cd Car_bot
+   ```
+   **Не вставляйте** строку вида `github_pat_...` **отдельной строкой** в терминал: shell попытается выполнить её как команду → `command not found`. Токен используют **только** внутри URL для **приватного** репозитория и только с правами **read** на код (fine-grained: **Contents: Read**).
+4. Если папка уже есть и репозиторий целый: `cd ~/Car_bot && git pull`
+5. Положите **`.env`** (с Mac): `scp /путь/к/.env root@ВАШ_IP:~/Car_bot/.env` затем на сервере: `chmod 600 ~/Car_bot/.env`
+6. Запуск: `cd ~/Car_bot && docker compose up -d --build`
+7. Проверка: `docker compose ps` и `docker compose logs -f bot`
+
+Ошибка **`403` / `Write access not granted`** чаще всего из‑за **не того токена** (например без доступа к репозиторию) или попытки **push** с сервера — для развёртывания нужен только **`git clone`**/`pull` (чтение).
+
 ## 1. Установка Docker на Ubuntu
 
 Выполните на сервере:
@@ -42,14 +62,14 @@ sudo usermod -aG docker "$USER"
 ## 2. Код и секреты на сервере
 
 ```bash
-git clone <url-репозитория> car-channel-bot
-cd car-channel-bot
+git clone https://github.com/timyrdoc13-alt/Car_bot.git
+cd Car_bot
 ```
 
 Скопируйте `.env` с локальной машины (пример):
 
 ```bash
-scp .env user@YOUR_SERVER_IP:~/car-channel-bot/.env
+scp .env root@YOUR_SERVER_IP:~/Car_bot/.env
 chmod 600 .env
 ```
 
@@ -124,7 +144,7 @@ sudo ufw status
 ## 6. Обновление версии
 
 ```bash
-cd car-channel-bot
+cd ~/Car_bot
 git pull
 docker compose build --no-cache
 docker compose up -d
@@ -144,7 +164,7 @@ docker compose --profile monitor up -d --build
 docker compose cp bot:/app/data/bot.db ./bot.backup.db
 ```
 
-Или найти том и скопировать файл через `docker volume inspect car-channel-bot_bot_data`.
+Или найти том и скопировать файл через `docker volume inspect` (имя вида `Car_bot_bot_data`, зависит от каталога с `docker-compose.yml`).
 
 Храните бэкапы вне сервера.
 
