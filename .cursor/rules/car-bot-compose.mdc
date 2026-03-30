@@ -1,0 +1,11 @@
+---
+description: docker-compose service and volumes
+globs: docker-compose.yml
+alwaysApply: false
+---
+
+# docker-compose
+
+- One `bot` service; `env_file: .env`; `restart: unless-stopped`.
+- Volume `./data:/app/data` (or agreed path) for SQLite.
+- `docker compose up -d --build` must work from clean checkout + `.env`.

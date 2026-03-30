@@ -1,0 +1,29 @@
+# Бот по умолчанию. Монитор Mashina: docker compose --profile monitor up -d
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/bot.db
+    volumes:
+      - bot_data:/app/data
+    restart: unless-stopped
+
+  monitor:
+    profiles: [monitor]
+    build: .
+    env_file: .env
+    command:
+      - uvicorn
+      - car_channel_bot.monitoring.app:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8765"
+    ports:
+      # Только интерфейс loopback на хосте — снаружи открывайте осознанно (см. DEPLOY.md)
+      - "127.0.0.1:8765:8765"
+    restart: unless-stopped
+
+volumes:
+  bot_data:

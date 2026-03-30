@@ -1,0 +1,1 @@
+"""Car channel Telegram bot."""

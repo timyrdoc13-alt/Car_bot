@@ -1,0 +1,10 @@
+---
+description: SQLite schema and repositories (aiosqlite)
+globs: db/**/*.py
+alwaysApply: false
+---
+
+# Database
+
+- **Dedup**: normalize URL; `DEDUP_TTL_DAYS` (default 30); index `url_normalized` and timestamps.
+- **aiosqlite**; `CREATE IF NOT EXISTS` or small migration module; link `posts` to `listings` where applicable.

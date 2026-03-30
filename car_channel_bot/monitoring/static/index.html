@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mashina.kg — мониторинг скрапинга</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: rgba(255,255,255,0.06);
+      --border: rgba(255,255,255,0.12);
+      --text: #e8eaef;
+      --muted: #8b919d;
+      --ok: #3ecf8e;
+      --bad: #f07178;
+      --warn: #e5c07b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: radial-gradient(1200px 800px at 20% 0%, #1a1f2e 0%, var(--bg) 55%);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 1.25rem; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.25rem; }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+      backdrop-filter: blur(12px);
+    }
+    label { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; }
+    .row { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 0.45rem 0.55rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.25);
+      color: var(--text);
+    }
+    .checks { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 0.75rem; }
+    .checks label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text); }
+    button {
+      margin-top: 0.9rem;
+      padding: 0.55rem 1.1rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04));
+      color: var(--text);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .steps { display: flex; flex-direction: column; gap: 0.65rem; }
+    .step {
+      border-left: 3px solid var(--border);
+      padding: 0.5rem 0 0.5rem 0.85rem;
+      background: rgba(0,0,0,0.15);
+      border-radius: 0 10px 10px 0;
+    }
+    .step.ok { border-left-color: var(--ok); }
+    .step.bad { border-left-color: var(--bad); }
+    .step-name { font-weight: 600; font-size: 0.9rem; }
+    .exp { font-size: 0.78rem; color: var(--muted); margin: 0.2rem 0; }
+    pre {
+      margin: 0.35rem 0 0;
+      font-size: 0.72rem;
+      overflow: auto;
+      max-height: 200px;
+      background: rgba(0,0,0,0.35);
+      padding: 0.5rem;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .refs { font-size: 0.8rem; color: var(--muted); }
+    .error-banner { color: var(--bad); font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Mashina.kg — шаги скрапинга</h1>
+    <p class="sub">Только <strong>Mashina.kg</strong> (не зависит от <code>LISTING_SOURCE</code> в .env). <code>.env</code> + Chromium. Токен — поле ниже.</p>
+
+    <div class="panel">
+      <div class="row">
+        <div><label>region</label><input id="region" type="text" placeholder="пусто = из URL по умолчанию" /></div>
+        <div><label>model</label><input id="model" type="text" placeholder="Audi или Audi A5" /></div>
+        <div><label>year_min → year_from</label><input id="year_min" type="number" min="0" value="0" /></div>
+        <div><label>price_max → price_to</label><input id="price_max" type="number" min="0" value="0" /></div>
+        <div><label>limit</label><input id="limit" type="number" min="1" max="30" value="5" /></div>
+      </div>
+      <div style="margin-top:0.75rem">
+        <label>list_url (опционально)</label>
+        <input id="list_url" type="text" placeholder="https://m.mashina.kg/search/all/?region=all" />
+      </div>
+      <div style="margin-top:0.75rem">
+        <label>car_condition_multiple (как на сайте, опц.)</label>
+        <input id="car_condition" type="text" placeholder="1,2" />
+      </div>
+      <div style="margin-top:0.75rem">
+        <label>X-Mashina-Monitor-Token (если задан в .env)</label>
+        <input id="mon_token" type="password" autocomplete="off" placeholder="только для удалённого доступа" />
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="iphone" /> iPhone UA</label>
+        <label><input type="checkbox" id="detail" /> Загрузить деталь первого объявления</label>
+      </div>
+      <button id="run">Запустить probe</button>
+    </div>
+
+    <div id="err" class="error-banner"></div>
+    <div class="panel">
+      <h2 style="margin:0 0 0.75rem;font-size:1rem;">Таймлайн</h2>
+      <div id="steps" class="steps"></div>
+    </div>
+    <div class="panel">
+      <h2 style="margin:0 0 0.5rem;font-size:1rem;">Ссылки</h2>
+      <div id="refs" class="refs"></div>
+    </div>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    function stepClass(s) {
+      if (s.ok === true) return 'ok';
+      if (s.ok === false) return 'bad';
+      return '';
+    }
+    $('run').onclick = async () => {
+      const err = $('err');
+      const stepsEl = $('steps');
+      const refsEl = $('refs');
+      err.textContent = '';
+      stepsEl.innerHTML = '';
+      refsEl.innerHTML = '';
+      const btn = $('run');
+      btn.disabled = true;
+      const body = {
+        region: $('region').value.trim() || null,
+        model: $('model').value.trim() || null,
+        year_min: Number($('year_min').value) || 0,
+        price_max: Number($('price_max').value) || 0,
+        limit: Number($('limit').value) || 5,
+        list_url: $('list_url').value.trim() || null,
+        car_condition_multiple: $('car_condition').value.trim() || null,
+        fetch_detail: $('detail').checked,
+        mashina_use_iphone_ua: $('iphone').checked,
+      };
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        const tok = $('mon_token').value.trim();
+        if (tok) headers['X-Mashina-Monitor-Token'] = tok;
+        const r = await fetch('/api/mashina/probe', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (data.error) err.textContent = 'Ошибка: ' + data.error;
+        (data.trace || []).forEach((s) => {
+          const div = document.createElement('div');
+          div.className = 'step ' + stepClass(s);
+          div.innerHTML =
+            '<div class="step-name">' + (s.step || '?') + '</div>' +
+            '<div class="exp"><strong>Ожидали:</strong> ' + escapeHtml(s.expected || '') + '</div>' +
+            (s.note ? '<div class="exp">' + escapeHtml(s.note) + '</div>' : '') +
+            '<pre>' + escapeHtml(JSON.stringify(s.got, null, 2)) + '</pre>';
+          stepsEl.appendChild(div);
+        });
+        if (data.detail) {
+          const d = document.createElement('div');
+          d.className = 'step ok';
+          d.innerHTML =
+            '<div class="step-name">Результат detail</div>' +
+            '<pre>' + escapeHtml(JSON.stringify(data.detail, null, 2)) + '</pre>';
+          stepsEl.appendChild(d);
+        }
+        refsEl.textContent = (data.refs_count || 0) + ' объявлений';
+        (data.refs || []).forEach((x) => {
+          const a = document.createElement('div');
+          a.innerHTML = '<a href="' + escapeAttr(x.url) + '" target="_blank" rel="noopener" style="color:#7eb6ff">' +
+            escapeHtml(x.url) + '</a>';
+          refsEl.appendChild(a);
+        });
+      } catch (e) {
+        err.textContent = String(e);
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    function escapeAttr(s) {
+      return String(s).replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>

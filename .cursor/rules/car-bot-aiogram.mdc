@@ -1,0 +1,13 @@
+---
+description: aiogram 3 handlers, FSM, and Telegram UX for car-channel-bot
+globs: bot/**/*.py
+alwaysApply: false
+---
+
+# aiogram 3
+
+- Use **Router**, **Dispatcher**, **FSMContext**; states grouped in a clear `StatesGroup`.
+- Admin-only: middleware or filter on `ADMIN_IDS` from settings; non-admins get a polite decline.
+- Callback data: short, versioned prefixes (e.g. `pub:`, `auto:`) with payload size within Telegram limits.
+- Publishing: reuse Telegram **file_id** from user messages when posting to the channel; respect **caption ≤ 1024** on the first photo of a media group.
+- Manual flow: photo(s) + caption → LLM → preview message with inline **Publish / Rewrite / Cancel** → on publish, write `posts`/`events` in DB.

@@ -1,0 +1,14 @@
+---
+description: Core Python/async standards and scope for car-channel-bot
+alwaysApply: true
+---
+
+# Car channel bot — core
+
+- Python 3.9+ (see `pyproject.toml`), type hints on public functions; prefer `async`/`await` for all I/O (DB, HTTP, Telegram, Playwright).
+- No blocking calls inside async handlers (no raw `time.sleep`, no sync DB in hot paths).
+- Tools: **ruff** for lint/format; **pytest** + **pytest-asyncio** for tests.
+- Config via **pydantic-settings** and `.env`; no secrets in code.
+- Keep modules small; one concern per file; match existing naming (snake_case modules, PascalCase classes where used).
+- **LLM output**: enforce max length and the short post structure from `AGENTS.md`; post-process or re-prompt if over cap.
+- If requirements conflict or domain (parser target) is unknown, **ask the user** before implementing.

@@ -1,0 +1,12 @@
+---
+description: LLM client, publishing helpers, stats services
+globs: services/**/*.py
+alwaysApply: false
+---
+
+# Services layer
+
+- **LLM**: single async client (httpx) calling OpenAI-compatible chat completions; inject base URL, key, model, timeout from settings; log latency and errors with structlog.
+- **Prompts**: system prompt encodes post template, char limit, and "no fabricated specs"; user content is raw listing text or normalized parser fields.
+- **Publishing**: thin wrapper around `Bot` methods; no business logic duplicated from handlers beyond validation.
+- **Stats**: read aggregates from DB (published, rejected, approve rate for auto mode); keep SQL or repository methods testable.

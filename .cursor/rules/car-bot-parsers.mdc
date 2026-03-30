@@ -1,0 +1,15 @@
+---
+description: Playwright scrapers and ListingSource adapters
+globs: parsers/**/*.py
+alwaysApply: false
+---
+
+# Parsers
+
+- **`ListingSource`**: async `search(filters)` → refs; `fetch_detail(ref)` → `ListingDetail` with `fields` + image URLs.
+- **`fields.py`**: единые ключи для LLM (`Заголовок`, `Год`, `Цена USD`, …) и `build_standard_fields` / `pick_price_usd`.
+- **`embed_json.py`**: разбор `__NEXT_DATA__` и `application/ld+json` до DOM; USD и картинки из schema.org Offer/Product.
+- **`common.py`**: скролл, пауза, `extract_usd_price_from_text`, `collect_image_urls`, `extract_title_and_body`.
+- **`quality.py`**: `validate_listing_detail` перед LLM в `auto_pipeline`.
+- Адаптеры: **`StubListingSource`**, **`LalafoListingSource`**, **`MashinaListingSource`** (`LISTING_SOURCE=lalafo` / `mashina`).
+- **Playwright**: задержки, User-Agent (desktop Lalafo / mobile Mashina); respect site ToS.

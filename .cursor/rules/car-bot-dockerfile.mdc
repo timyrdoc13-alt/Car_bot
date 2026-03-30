@@ -1,0 +1,11 @@
+---
+description: Dockerfile for bot + Playwright Chromium
+globs: Dockerfile
+alwaysApply: false
+---
+
+# Dockerfile
+
+- Playwright: install **chromium** + OS deps (`playwright install --with-deps chromium`).
+- Non-root user if practical; copy app after deps for layer cache.
+- No secrets in image; `ENV` only for non-sensitive defaults.
