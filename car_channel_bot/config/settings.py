@@ -110,6 +110,18 @@ class Settings(BaseSettings):
         ge=0.5,
         description="Пауза Playwright для Mashina.kg (сек)",
     )
+    auto_detail_concurrency: int = Field(
+        default=3,
+        ge=1,
+        le=12,
+        description="Параллельных fetch_detail в автопайплайне",
+    )
+    auto_llm_concurrency: int = Field(
+        default=2,
+        ge=1,
+        le=12,
+        description="Параллельных LLM генераций в автопайплайне",
+    )
 
     channel_gallery_min_photos: int = Field(
         default=4,

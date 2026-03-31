@@ -23,6 +23,9 @@ _CLIENT_HEADERS = {"User-Agent": MOBILE_USER_AGENT}
 
 T = TypeVar("T")
 
+_MAX_TELEGRAM_PHOTO_BYTES = 9_000_000  # guardrail: oversized photos often break albums
+_JPEG_MAX_SIDE = 1600
+
 
 async def _telegram_with_flood_retry(
     op: Callable[[], Awaitable[T]],
@@ -66,6 +69,43 @@ def _filename_for_url(url: str, content_type: str | None, index: int) -> str:
     return f"photo_{index}{ext}"
 
 
+def _try_normalize_image_bytes(raw: bytes) -> bytes:
+    """Best-effort resize/compress to make Telegram albums more reliable."""
+    # Avoid importing Pillow unless actually used.
+    try:
+        from io import BytesIO
+
+        from PIL import Image, ImageOps
+    except Exception:
+        return raw
+
+    try:
+        with Image.open(BytesIO(raw)) as im:
+            im = ImageOps.exif_transpose(im)
+            if im.mode not in {"RGB", "L"}:
+                im = im.convert("RGB")
+            w, h = im.size
+            m = max(w, h)
+            if m > _JPEG_MAX_SIDE:
+                scale = _JPEG_MAX_SIDE / float(m)
+                nw = max(1, int(w * scale))
+                nh = max(1, int(h * scale))
+                im = im.resize((nw, nh), resample=Image.Resampling.LANCZOS)
+
+            buf = BytesIO()
+            # Start with a good quality; if still too big, step down.
+            for q in (88, 82, 76, 70, 65):
+                buf.seek(0)
+                buf.truncate(0)
+                im.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
+                out = buf.getvalue()
+                if len(out) <= _MAX_TELEGRAM_PHOTO_BYTES:
+                    return out
+            return out
+    except Exception:
+        return raw
+
+
 async def fetch_listing_images(
     urls: list[str],
     *,
@@ -95,7 +135,13 @@ async def fetch_listing_images(
                     if "image" not in ctn:
                         continue
                 name = _filename_for_url(u, ct, len(out))
-                out.append(BufferedInputFile(r.content, filename=name))
+                content = r.content
+                if len(content) > _MAX_TELEGRAM_PHOTO_BYTES or (ct and "image/" in ct and "jpeg" not in ct.lower()):
+                    norm = _try_normalize_image_bytes(content)
+                    if norm and len(norm) <= _MAX_TELEGRAM_PHOTO_BYTES:
+                        content = norm
+                        name = f"photo_{len(out)}.jpg"
+                out.append(BufferedInputFile(content, filename=name))
             except Exception as e:
                 log.debug("listing_image_fetch_failed", url=u[:120], err=str(e))
                 continue
@@ -121,8 +167,10 @@ class ChannelPublisher:
         return lo, hi
 
     def _prepare_urls(self, image_urls: list[str]) -> list[str]:
-        _, hi = self._gallery_bounds()
-        return sanitize_vehicle_image_urls(image_urls or [], max_photos=hi)
+        # Берём расширенный пул кандидатов, чтобы компенсировать битые/недоступные URL.
+        # Иначе первые 4-6 ссылок могут дать только 1 валидный файл.
+        candidate_cap = 12
+        return sanitize_vehicle_image_urls(image_urls or [], max_photos=candidate_cap)
 
     async def publish_photos_with_caption(
         self,
@@ -133,9 +181,21 @@ class ChannelPublisher:
         cap = (caption or "")[:1024]
         clean_urls = self._prepare_urls(image_urls)
         _, hi = self._gallery_bounds()
-        if len(clean_urls) > hi:
-            clean_urls = clean_urls[:hi]
-        files = await fetch_listing_images(clean_urls, limit=hi)
+        log.info(
+            "channel_publish_prepare",
+            urls_in=len(image_urls or []),
+            urls_clean=len(clean_urls),
+            gallery_max=hi,
+        )
+        files = await fetch_listing_images(clean_urls, limit=len(clean_urls))
+        if len(files) > hi:
+            files = files[:hi]
+        log.info(
+            "channel_publish_files",
+            urls_clean=len(clean_urls),
+            files=len(files),
+            bytes=[len(f.data) for f in files[:6]],
+        )
         if not files:
             async def _txt() -> int | None:
                 msg = await self._bot.send_message(self._channel_id, cap or ".")
@@ -167,7 +227,13 @@ class ChannelPublisher:
                 msgs = await self._bot.send_media_group(self._channel_id, media=media)
                 return msgs[0].message_id if msgs else None
             except TelegramBadRequest as e:
-                log.warning("channel_album_rejected_try_single", err=str(e))
+                log.warning(
+                    "channel_album_rejected_try_single",
+                    err=str(e),
+                    urls_clean=len(clean_urls),
+                    files=len(files),
+                    bytes=[len(f.data) for f in files[:6]],
+                )
                 try:
                     msg = await self._bot.send_photo(
                         self._channel_id, files[0], caption=cap or None

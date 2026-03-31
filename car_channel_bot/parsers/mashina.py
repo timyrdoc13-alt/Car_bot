@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import structlog
 from playwright.async_api import async_playwright
@@ -52,6 +52,17 @@ def _trace_sink(filters: dict[str, Any]) -> list[dict[str, Any]] | None:
     return t if isinstance(t, list) else None
 
 
+def _with_page(url: str, page_num: int) -> str:
+    """Ставит ?page=N для пагинации Mashina mobile."""
+    p = urlparse(url)
+    q = dict(parse_qsl(p.query, keep_blank_values=True))
+    if page_num <= 1:
+        q.pop("page", None)
+    else:
+        q["page"] = str(page_num)
+    return urlunparse((p.scheme, p.netloc, p.path, "", urlencode(sorted(q.items())), ""))
+
+
 class MashinaListingSource:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -69,6 +80,11 @@ class MashinaListingSource:
     async def search(self, filters: dict[str, Any]) -> list[ListingRef]:
         limit = int(filters.get("limit", 10))
         limit = max(1, min(limit, 30))
+        # Собираем расширенный пул: после дедупа в БД могут отвалиться первые N ссылок.
+        collect_target = int(filters.get("mashina_collect_target") or max(limit * 4, 40))
+        collect_target = max(limit, min(collect_target, 160))
+        pages = int(filters.get("mashina_pages") or max(2, min(8, (collect_target + 19) // 20)))
+        pages = max(1, min(pages, 12))
         list_url, applied = self._search_url(filters)
         list_url, applied = finalize_mashina_list_url(list_url)
         applied_qs = applied.get("query") or {}
@@ -89,6 +105,8 @@ class MashinaListingSource:
                 "query": applied_qs,
                 "path_brand_slug": path_brand_slug,
                 "path_series_slug": path_series_slug,
+                "pages": pages,
+                "collect_target": collect_target,
             },
             ok=True,
         )
@@ -115,76 +133,97 @@ class MashinaListingSource:
                     viewport={"width": 390, "height": 844},
                 )
                 page = await ctx.new_page()
-                resp = await page.goto(list_url, wait_until="load", timeout=90_000)
-                final_url = page.url
-                status = resp.status if resp else None
-                trace_step(
-                    trace,
-                    step="goto_list",
-                    expected="HTTP 200, редирект на m.mashina.kg",
-                    got={"status": status, "final_url": final_url},
-                    ok=status == 200 if status is not None else None,
-                )
-                details_ok = False
-                try:
-                    await page.wait_for_selector('a[href*="/details/"]', timeout=35_000)
-                    details_ok = True
-                except Exception:
-                    log.warning("mashina_search_no_details_timeout")
-                trace_step(
-                    trace,
-                    step="wait_details_links",
-                    expected="есть a[href*=\"/details/\"] на выдаче",
-                    got=details_ok,
-                    ok=details_ok,
-                )
-                ad_item_ok = False
-                try:
-                    await page.wait_for_selector('[data-testid="ad-item"]', timeout=4_000)
-                    ad_item_ok = True
-                except Exception:
-                    pass
-                trace_step(
-                    trace,
-                    step="wait_ad_item_optional",
-                    expected="опционально [data-testid=\"ad-item\"]",
-                    got=ad_item_ok,
-                    note="не критично если нет",
-                )
+                hrefs: list[str] = []
+                href_seen: set[str] = set()
+                page_probe: list[dict[str, Any]] = []
+                for page_num in range(1, pages + 1):
+                    paged_url = _with_page(list_url, page_num)
+                    resp = await page.goto(paged_url, wait_until="load", timeout=90_000)
+                    final_url = page.url
+                    status = resp.status if resp else None
+                    if page_num == 1:
+                        trace_step(
+                            trace,
+                            step="goto_list",
+                            expected="HTTP 200, редирект на m.mashina.kg",
+                            got={"status": status, "final_url": final_url},
+                            ok=status == 200 if status is not None else None,
+                        )
+                    details_ok = False
+                    try:
+                        await page.wait_for_selector('a[href*="/details/"]', timeout=35_000)
+                        details_ok = True
+                    except Exception:
+                        log.warning("mashina_search_no_details_timeout", page=page_num)
+                    if page_num == 1:
+                        trace_step(
+                            trace,
+                            step="wait_details_links",
+                            expected="есть a[href*=\"/details/\"] на выдаче",
+                            got=details_ok,
+                            ok=details_ok,
+                        )
+                    if page_num == 1:
+                        ad_item_ok = False
+                        try:
+                            await page.wait_for_selector('[data-testid="ad-item"]', timeout=4_000)
+                            ad_item_ok = True
+                        except Exception:
+                            pass
+                        trace_step(
+                            trace,
+                            step="wait_ad_item_optional",
+                            expected="опционально [data-testid=\"ad-item\"]",
+                            got=ad_item_ok,
+                            note="не критично если нет",
+                        )
 
-                rounds, final_h = await C.scroll_until_height_stable(
-                    page,
-                    step_px=1400,
-                    pause_s=scroll_pause,
-                    max_rounds=max_rounds,
-                    stable_needed=stable_needed,
-                )
-                trace_step(
-                    trace,
-                    step="scroll_infinite",
-                    expected="scrollHeight стабилизируется после подгрузки карточек",
-                    got={"rounds": rounds, "scroll_height": final_h, "pause_s": scroll_pause},
-                )
-                await C.scroll_page(page, rounds=3, step_px=900, pause_s=min(0.6, scroll_pause))
-                await C.delay_after_navigation(page, self._delay)
+                    rounds, final_h = await C.scroll_until_height_stable(
+                        page,
+                        step_px=1400,
+                        pause_s=scroll_pause,
+                        max_rounds=max_rounds,
+                        stable_needed=stable_needed,
+                    )
+                    if page_num == 1:
+                        trace_step(
+                            trace,
+                            step="scroll_infinite",
+                            expected="scrollHeight стабилизируется после подгрузки карточек",
+                            got={"rounds": rounds, "scroll_height": final_h, "pause_s": scroll_pause},
+                        )
+                    await C.scroll_page(page, rounds=3, step_px=900, pause_s=min(0.6, scroll_pause))
+                    await C.delay_after_navigation(page, self._delay)
 
-                hrefs: list[str] = await page.evaluate(
-                    """() => {
-                      const out = new Set();
-                      for (const a of document.querySelectorAll('a[href*="/details/"]')) {
-                        if (a.href) out.add(a.href);
-                      }
-                      return [...out];
-                    }"""
-                )
+                    page_hrefs: list[str] = await page.evaluate(
+                        """() => {
+                          const out = new Set();
+                          for (const a of document.querySelectorAll('a[href*="/details/"]')) {
+                            if (a.href) out.add(a.href);
+                          }
+                          return [...out];
+                        }"""
+                    )
+                    added = 0
+                    for h in page_hrefs:
+                        if h in href_seen:
+                            continue
+                        href_seen.add(h)
+                        hrefs.append(h)
+                        added += 1
+                    page_probe.append(
+                        {"page": page_num, "url": paged_url, "status": status, "hrefs": len(page_hrefs), "new": added}
+                    )
+                    if len(hrefs) >= collect_target:
+                        break
             finally:
                 await browser.close()
 
         trace_step(
             trace,
             step="collect_hrefs_dom",
-            expected="> 0 уникальных /details/ после скролла",
-            got={"count": len(hrefs), "sample": hrefs[:3]},
+            expected="> 0 уникальных /details/ после скролла (несколько страниц)",
+            got={"count": len(hrefs), "sample": hrefs[:3], "pages_probe": page_probe},
             ok=len(hrefs) > 0,
         )
 
@@ -205,16 +244,17 @@ class MashinaListingSource:
             if use_url_substring_model_filter and model_filter not in norm.lower():
                 continue
             refs.append(ListingRef(url=norm, source="mashina.kg"))
-            if len(refs) >= limit:
+            if len(refs) >= collect_target:
                 break
 
         trace_step(
             trace,
             step="filter_model_limit",
-            expected=f"до {limit} ссылок; substring по model только без path brand (/search/all/)",
+            expected=f"пул до {collect_target} ссылок (для дедупа/вариативности), лимит UI={limit}",
             got={
                 "kept": len(refs),
                 "limit": limit,
+                "collect_target": collect_target,
                 "model_filter": model_filter or "(none)",
                 "path_brand_slug": path_brand_slug,
                 "substring_filter": use_url_substring_model_filter,
