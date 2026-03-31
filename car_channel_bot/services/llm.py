@@ -9,25 +9,41 @@ from car_channel_bot.services.fx_nbrb import NbrbFxService
 log = structlog.get_logger()
 
 SYSTEM_PROMPT = (
-    "You format car listings for a Telegram sales channel in Russian.\n"
-    "Rules:\n"
-    "- Output ONLY the final post text, no preamble or quotes.\n"
-    "- First line: short trim line (make/model/trim level).\n"
-    "- Then 4-6 bullet lines starting with \"- \" with concrete facts "
-    "(year, mileage, engine, drive, condition, etc.).\n"
-    "- Use only facts present in the user message. If a fact is missing, "
-    "write briefly \"уточнить у менеджера\" for that bullet instead of inventing.\n"
-    "- Do NOT include URLs, links, http(s), or \"www.\" in the post text.\n"
+    "Ты оформляешь объявления для Telegram-канала о подборе авто на русском языке.\n"
+    "Верни ТОЛЬКО финальный текст поста, без комментариев, кавычек и пояснений.\n"
     "\n"
-    "FX and prices (mandatory when rates below are present):\n"
-    "{fx_block}\n"
+    "КРИТИЧЕСКОЕ ПРАВИЛО ДОСТОВЕРНОСТИ:\n"
+    "- Используй ТОЛЬКО факты из входных данных пользователя.\n"
+    "- НИЧЕГО не выдумывай (комплектации, опции, повреждения, историю и т.п.).\n"
+    "- Если поля нет, пиши: \"уточнить у менеджера\".\n"
+    "- Не добавляй URL/ссылки/http/www.\n"
     "\n"
-    "- One compact price line with 🇧🇾 and 🇷🇺: BYN and RUB for the same USD "
-    "price from the listing; use ONLY NBRB rates above (not myfin).\n"
-    "- Format example: \"🇧🇾 … BYN (экв. N $)\" and \"🇷🇺 … RUB (экв. N $)\"; round sensibly.\n"
-    "- If no $ price, do not invent conversions; use \"{missing_price_hint}\".\n"
-    "- Last line: short CTA — {cta_tail}\n"
-    "- Keep total length under {max_chars} characters (hard limit). Be concise."
+    "ЖЕСТКИЙ ШАБЛОН (сохрани порядок блоков):\n"
+    "1) Первая строка: \"{{YEAR}} {{MAKE}} {{MODEL}} {{TRIM}}\". Если части нет — подставь \"уточнить у менеджера\".\n"
+    "2) Разделитель: \"----------------------------\"\n"
+    "3) 8-10 строк фактов с префиксом \"⠀✅ \"\n"
+    "4) Разделитель: \"----------------------------\"\n"
+    "5) Тех.блок строго в 4 строках:\n"
+    "   \"⠀⚙️ Привод - ...\"\n"
+    "   \"⠀⚙️ КПП - ...\"\n"
+    "   \"⠀⚙️ Двигатель - ...\"\n"
+    "   \"⠀⚙️ Пробег - ...\"\n"
+    "6) Разделитель: \"----------------------------\"\n"
+    "7) Строка цены: \"Расчётная стоимость - {{USD}}💲\".\n"
+    "   Если цены нет: \"Расчётная стоимость - уточнить у менеджера\".\n"
+    "8) Блок доставки (всегда, без изменений смысла):\n"
+    "   \"Доставка в Беларусь:\"\n"
+    "   \"— Погрузка на автовоз\"\n"
+    "   \"— До Минска от 7 дней\"\n"
+    "   \"— Полный пакет документов\"\n"
+    "   \"— Повторная растаможка не требуется, только утильсбор (660–1200 BYN)\"\n"
+    "9) Финальный CTA блок (строго):\n"
+    "   \"⠀📷  ДЕТАЛЬНЫЕ ФОТО\"\n"
+    "   \"⠀📂  ИСТОРИЯ АВТО\"\n"
+    "   \"⠀🎬  ПОДБОР АНАЛОГОВ\"\n"
+    "   \"ПИШИ В ЛС, Я ПОДБЕРУ ЖЕЛАЕМЫЙ ВАРИАНТ ⬇️\"\n"
+    "\n"
+    "Требования к длине: не превышай {max_chars} символов."
 )
 
 
@@ -88,19 +104,37 @@ class LLMService:
 
     async def _fallback_caption(self, raw: str) -> str:
         lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-        head = lines[:1] or ["Автомобиль"]
-        bullets = lines[1:6] if len(lines) > 1 else ["- Подробности — у менеджера"]
-        body = "\n".join(head + [ln if ln.startswith("-") else f"- {ln}" for ln in bullets])
-        snap = await self._fx.get_snapshot()
-        if snap is not None:
-            tail = (
-                f"🇧🇾 / 🇷🇺 — пересчитайте цену в $ по курсу НБ РБ на {snap.rate_date_display} "
-                f"(1 USD = {snap.byn_per_usd:.4f} BYN, 1 USD ≈ {snap.rub_per_usd:.2f} RUB). "
-                f"{self._settings.cta_tail}"
-            )
-        else:
-            tail = f"🇧🇾Цена РБ — уточнить\n🇷🇺РФ — уточнить\n{self._settings.cta_tail}"
-        text = f"{body}\n{tail}"
+        head = lines[0] if lines else "Авто уточнить у менеджера"
+        raw_facts = lines[1:11] if len(lines) > 1 else []
+        facts = [f"⠀✅ {f.lstrip('- ').strip()}" for f in raw_facts[:10]]
+        while len(facts) < 8:
+            facts.append("⠀✅ уточнить у менеджера")
+        text = "\n".join(
+            [
+                head,
+                "----------------------------",
+                *facts[:10],
+                "----------------------------",
+                "⠀⚙️ Привод - уточнить у менеджера",
+                "⠀⚙️ КПП - уточнить у менеджера",
+                "⠀⚙️ Двигатель - уточнить у менеджера",
+                "⠀⚙️ Пробег - уточнить у менеджера",
+                "----------------------------",
+                "Расчётная стоимость - уточнить у менеджера",
+                "",
+                "Доставка в Беларусь:",
+                "— Погрузка на автовоз",
+                "— До Минска от 7 дней",
+                "— Полный пакет документов",
+                "— Повторная растаможка не требуется, только утильсбор (660–1200 BYN)",
+                "",
+                "⠀📷  ДЕТАЛЬНЫЕ ФОТО",
+                "⠀📂  ИСТОРИЯ АВТО",
+                "⠀🎬  ПОДБОР АНАЛОГОВ",
+                "",
+                "ПИШИ В ЛС, Я ПОДБЕРУ ЖЕЛАЕМЫЙ ВАРИАНТ ⬇️",
+            ]
+        )
         return self._enforce_cap(text)
 
     @staticmethod
