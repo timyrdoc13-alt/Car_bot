@@ -65,6 +65,8 @@ class NbrbFxService:
         return snap
 
     async def llm_fx_block(self) -> str:
+        if not self._settings.fx_enabled:
+            return ""
         snap = await self.get_snapshot()
         if snap is None:
             return "(курсы НБ РБ недоступны — не придумывай BYN/RUB)"

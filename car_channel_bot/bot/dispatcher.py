@@ -1,6 +1,7 @@
 """Сборка Dispatcher: middleware, роутеры, workflow_data для polling и scheduler."""
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from car_channel_bot.bot.drafts import DraftStore
@@ -16,6 +17,20 @@ from car_channel_bot.services.llm import LLMService
 from car_channel_bot.services.publisher import ChannelPublisher
 
 
+def _fsm_storage(settings: Settings) -> BaseStorage:
+    url = (settings.redis_url or "").strip()
+    if not url:
+        return MemoryStorage()
+    try:
+        from aiogram.fsm.storage.redis import RedisStorage
+    except ImportError as e:
+        raise RuntimeError(
+            "Для Redis FSM: pip install 'car-channel-bot[queue]'",
+        ) from e
+    ttl = settings.fsm_state_ttl_seconds
+    return RedisStorage.from_url(url, state_ttl=ttl, data_ttl=ttl)
+
+
 def build_dispatcher(
     *,
     bot: Bot,
@@ -29,7 +44,7 @@ def build_dispatcher(
     def publisher_factory() -> ChannelPublisher:
         return ChannelPublisher(bot, settings.channel_id, settings)
 
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=_fsm_storage(settings))
     dp.update.outer_middleware(
         InjectMiddleware(
             db=db,

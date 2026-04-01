@@ -41,6 +41,28 @@ class Settings(BaseSettings):
     llm_api_key: str = Field(default="")
     llm_model: str = Field(default="gpt-4o-mini")
     llm_timeout_seconds: float = Field(default=60.0)
+    llm_max_retries: int = Field(
+        default=4,
+        ge=0,
+        le=12,
+        description="Повторы POST chat/completions при 429/5xx",
+    )
+    llm_retry_base_seconds: float = Field(
+        default=1.0,
+        ge=0.1,
+        description="База экспоненциального backoff между повторами LLM",
+    )
+    caption_cache_ttl_seconds: int = Field(
+        default=0,
+        ge=0,
+        description="Кэш подписей LLM по хэшу текста промпта, сек; 0 — выкл.",
+    )
+    llm_max_tokens: int = Field(
+        default=800,
+        ge=64,
+        le=4096,
+        description="max_tokens в запросе chat/completions",
+    )
     llm_max_output_chars: int = Field(
         default=900,
         description="Target max chars for caption; Telegram hard limit 1024",
@@ -140,6 +162,26 @@ class Settings(BaseSettings):
         ge=0.5,
         le=120.0,
         description="Пауза между публикациями в канал (снижает Flood control Telegram)",
+    )
+    image_download_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=12,
+        description="Параллельных HTTP GET при скачивании фото объявления",
+    )
+
+    redis_url: str = Field(
+        default="",
+        description="Redis: FSM aiogram + опциональная очередь пайплайна; пусто — MemoryStorage",
+    )
+    pipeline_queue_key: str = Field(
+        default="car-bot:pipeline:jobs",
+        description="LPUSH/BRPOP ключ заданий для car-pipeline-worker",
+    )
+    fsm_state_ttl_seconds: int = Field(
+        default=604_800,
+        ge=60,
+        description="TTL состояния FSM в Redis (state_ttl / data_ttl)",
     )
 
     @model_validator(mode="after")

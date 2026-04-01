@@ -100,6 +100,15 @@ docker compose down
 
 Том **`bot_data`** сохраняет каталог `/app/data` с **`bot.db`** между перезапусками (`docker compose down` том **не** удаляет; удалить данные явно: `docker compose down -v` — осторожно).
 
+### Redis, FSM и воркер пайплайна (опционально)
+
+При **`REDIS_URL`** бот берёт FSM из **Redis** (состояния сценариев переживают рестарт). Если заданы **`REDIS_URL`** и **`PIPELINE_QUEUE_KEY`**, срабатывание **расписания** только ставит задание в очередь; тяжёлый парсинг+LLM выполняет процесс **`car-pipeline-worker`** (тот же `.env` и **`DATABASE_PATH`**, что у бота). Зависимость: `pip install ".[queue]"` (в Docker-образе уже включено).
+
+```bash
+docker compose --profile pipeline up -d --build
+docker compose logs -f pipeline-worker
+```
+
 ## 4. Веб-монитор Mashina (опционально)
 
 Монитор слушает **`0.0.0.0` внутри контейнера**, чтобы Uvicorn был доступен с хоста через проброс порта. На **хосте** в [docker-compose.yml](docker-compose.yml) порт привязан к **loopback**:

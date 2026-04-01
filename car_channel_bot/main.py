@@ -9,6 +9,7 @@ from car_channel_bot.bot.dispatcher import build_dispatcher
 from car_channel_bot.config.settings import clear_settings_cache, get_settings
 from car_channel_bot.db.repositories import Database
 from car_channel_bot.logging_setup import configure_logging
+from car_channel_bot.parsers.playwright_shared import shutdown_shared_playwright
 from car_channel_bot.scheduler import setup_scheduler
 
 log = structlog.get_logger()
@@ -31,6 +32,7 @@ async def run() -> None:
     finally:
         if sched and sched.running:
             sched.shutdown(wait=False)
+        await shutdown_shared_playwright()
         await db.close()
         await bot.session.close()
         log.info("shutdown_complete")

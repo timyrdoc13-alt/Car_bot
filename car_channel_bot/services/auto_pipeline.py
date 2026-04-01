@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Optional
 
 import structlog
@@ -25,7 +26,9 @@ async def build_auto_batch_items(
     skip_dedupe: bool = False,
     pipeline_stats: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
+    t0 = time.perf_counter()
     refs = await listing_source.search(filters)
+    search_s = round(time.perf_counter() - t0, 3)
     log.info(
         "auto_pipeline_search",
         refs_found=len(refs),
@@ -33,7 +36,9 @@ async def build_auto_batch_items(
         skip_dedupe=skip_dedupe,
         detail_concurrency=settings.auto_detail_concurrency,
         llm_concurrency=settings.auto_llm_concurrency,
+        phase_duration_s=search_s,
     )
+    log.info("auto_pipeline_phase", phase="search", duration_s=search_s, refs_found=len(refs))
 
     skipped_dedupe = 0
     detail_errors = 0
@@ -50,8 +55,10 @@ async def build_auto_batch_items(
 
     async def _process_one(idx: int, ref: ListingRef) -> tuple[int, dict[str, Any] | None, str | None]:
         try:
+            t_detail0 = time.perf_counter()
             async with detail_sem:
                 detail = await listing_source.fetch_detail(ref)
+            detail_s = round(time.perf_counter() - t_detail0, 3)
         except Exception as e:
             log.warning(
                 "auto_pipeline_detail_error",
@@ -74,15 +81,31 @@ async def build_auto_batch_items(
         raw_blob = LLMService.build_prompt_from_parsed_fields(
             {**detail.fields, "Описание": detail.description}
         )
+        t_llm0 = time.perf_counter()
         async with llm_sem:
             cap = caption_without_urls(await llm.generate_caption(raw_blob))
+        llm_s = round(time.perf_counter() - t_llm0, 3)
+        log.debug(
+            "auto_pipeline_item_timing",
+            url=ref.url[:80],
+            detail_s=detail_s,
+            llm_s=llm_s,
+        )
         return idx, {
             "url": detail.url,
             "caption": cap,
             "image_urls": list(detail.image_urls),
         }, None
 
+    t_proc0 = time.perf_counter()
     results = await asyncio.gather(*[_process_one(i, r) for i, r in kept_refs], return_exceptions=True)
+    process_s = round(time.perf_counter() - t_proc0, 3)
+    log.info(
+        "auto_pipeline_phase",
+        phase="detail_and_llm",
+        duration_s=process_s,
+        kept_refs=len(kept_refs),
+    )
     items_by_idx: list[tuple[int, dict[str, Any]]] = []
     for res in results:
         if isinstance(res, Exception):

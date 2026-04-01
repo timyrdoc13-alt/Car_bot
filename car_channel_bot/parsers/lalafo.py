@@ -7,13 +7,13 @@ from typing import Any
 from urllib.parse import urldefrag, urlparse, urlunparse
 
 import structlog
-from playwright.async_api import async_playwright
 
 from car_channel_bot.config.settings import Settings
 from car_channel_bot.parsers import common as C
 from car_channel_bot.parsers import embed_json as EJ
 from car_channel_bot.parsers import fields as LF
 from car_channel_bot.parsers.base import ListingDetail, ListingRef
+from car_channel_bot.parsers.playwright_shared import shared_chromium
 
 log = structlog.get_logger()
 
@@ -44,20 +44,19 @@ class LalafoListingSource:
         limit = max(1, min(limit, 30))
         list_url = self._search_url(filters)
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self._settings.playwright_headless)
+        browser = await shared_chromium(headless=self._settings.playwright_headless)
+        ctx = await browser.new_context(user_agent=C.DEFAULT_USER_AGENT, locale="ru-RU")
+        try:
+            page = await ctx.new_page()
+            await page.goto(list_url, wait_until="load", timeout=90_000)
             try:
-                ctx = await browser.new_context(user_agent=C.DEFAULT_USER_AGENT, locale="ru-RU")
-                page = await ctx.new_page()
-                await page.goto(list_url, wait_until="load", timeout=90_000)
-                try:
-                    await page.wait_for_selector('a[href*="-id-"]', timeout=35_000)
-                except Exception:
-                    log.warning("lalafo_search_no_links_selector_timeout")
-                await C.scroll_page(page, rounds=6, step_px=1400, pause_s=0.5)
-                await C.delay_after_navigation(page, self._delay)
-                hrefs: list[str] = await page.evaluate(
-                    """() => {
+                await page.wait_for_selector('a[href*="-id-"]', timeout=35_000)
+            except Exception:
+                log.warning("lalafo_search_no_links_selector_timeout")
+            await C.scroll_page(page, rounds=6, step_px=1400, pause_s=0.5)
+            await C.delay_after_navigation(page, self._delay)
+            hrefs: list[str] = await page.evaluate(
+                """() => {
                       const out = new Set();
                       for (const a of document.querySelectorAll('a[href]')) {
                         const h = a.href;
@@ -65,9 +64,9 @@ class LalafoListingSource:
                       }
                       return [...out];
                     }"""
-                )
-            finally:
-                await browser.close()
+            )
+        finally:
+            await ctx.close()
 
         seen: set[str] = set()
         refs: list[ListingRef] = []
@@ -92,40 +91,39 @@ class LalafoListingSource:
         return refs
 
     async def fetch_detail(self, ref: ListingRef) -> ListingDetail:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self._settings.playwright_headless)
-            try:
-                ctx = await browser.new_context(user_agent=C.DEFAULT_USER_AGENT, locale="ru-RU")
-                page = await ctx.new_page()
-                await page.goto(ref.url, wait_until="domcontentloaded", timeout=90_000)
-                await C.delay_after_navigation(page, self._delay)
+        browser = await shared_chromium(headless=self._settings.playwright_headless)
+        ctx = await browser.new_context(user_agent=C.DEFAULT_USER_AGENT, locale="ru-RU")
+        try:
+            page = await ctx.new_page()
+            await page.goto(ref.url, wait_until="domcontentloaded", timeout=90_000)
+            await C.delay_after_navigation(page, self._delay)
 
-                html = await C.get_page_html(page)
-                next_data = EJ.extract_next_data_json(html)
-                ld_blocks = EJ.extract_json_ld_blocks(html)
+            html = await C.get_page_html(page)
+            next_data = EJ.extract_next_data_json(html)
+            ld_blocks = EJ.extract_json_ld_blocks(html)
 
-                price_embed = EJ.usd_price_from_json_ld(ld_blocks)
-                if next_data and not price_embed:
-                    price_embed = EJ.usd_price_from_next_data(next_data)
-                title_embed = EJ.title_from_json_ld(ld_blocks)
+            price_embed = EJ.usd_price_from_json_ld(ld_blocks)
+            if next_data and not price_embed:
+                price_embed = EJ.usd_price_from_next_data(next_data)
+            title_embed = EJ.title_from_json_ld(ld_blocks)
 
-                title_dom, body_text = await C.extract_title_and_body(page)
-                title = (title_embed or title_dom or "").strip()
-                price_usd = LF.pick_price_usd(
-                    price_embed,
-                    C.extract_usd_price_from_text(body_text),
-                )
+            title_dom, body_text = await C.extract_title_and_body(page)
+            title = (title_embed or title_dom or "").strip()
+            price_usd = LF.pick_price_usd(
+                price_embed,
+                C.extract_usd_price_from_text(body_text),
+            )
 
-                img_ld = EJ.images_from_json_ld(ld_blocks, limit=12)
-                img_dom = await C.collect_image_urls(
-                    page,
-                    ref.url,
-                    domain_hints=("lalafo", "static", "cdn"),
-                    limit=12,
-                )
-                image_urls = _merge_urls(img_ld, img_dom, 12)
-            finally:
-                await browser.close()
+            img_ld = EJ.images_from_json_ld(ld_blocks, limit=12)
+            img_dom = await C.collect_image_urls(
+                page,
+                ref.url,
+                domain_hints=("lalafo", "static", "cdn"),
+                limit=12,
+            )
+            image_urls = _merge_urls(img_ld, img_dom, 12)
+        finally:
+            await ctx.close()
 
         desc = C.trim_description(body_text, title_dom)
         field_map = LF.build_standard_fields(

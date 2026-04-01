@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import structlog
@@ -21,9 +22,16 @@ async def publish_one_auto_item(
     item: dict[str, Any],
 ) -> None:
     cap = caption_without_urls(item.get("caption") or "")
+    t0 = time.perf_counter()
     mid = await publisher.publish_photos_with_caption(
         image_urls=item.get("image_urls") or [],
         caption=cap,
+    )
+    log.debug(
+        "auto_publish_channel_phase",
+        phase="publish_photos",
+        duration_s=round(time.perf_counter() - t0, 3),
+        listing_url=(item.get("url") or "")[:120],
     )
     await db.mark_listing_seen(item["url"])
     await db.insert_post(

@@ -1,4 +1,4 @@
-# Бот по умолчанию. Монитор Mashina: docker compose --profile monitor up -d
+# Бот по умолчанию. Монитор: --profile monitor. Redis + воркер пайплайна: --profile pipeline
 services:
   bot:
     build: .
@@ -7,6 +7,27 @@ services:
       DATABASE_PATH: /app/data/bot.db
     volumes:
       - bot_data:/app/data
+    restart: unless-stopped
+
+  redis:
+    profiles: [pipeline]
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  pipeline-worker:
+    profiles: [pipeline]
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/bot.db
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - bot_data:/app/data
+    command: ["car-pipeline-worker"]
+    depends_on:
+      - redis
     restart: unless-stopped
 
   monitor:
@@ -27,3 +48,4 @@ services:
 
 volumes:
   bot_data:
+  redis_data:

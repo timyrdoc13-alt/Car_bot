@@ -106,46 +106,74 @@ def _try_normalize_image_bytes(raw: bytes) -> bytes:
         return raw
 
 
+async def _fetch_one_listing_image(
+    client: httpx.AsyncClient,
+    sem: asyncio.Semaphore,
+    ordinal: int,
+    u: str,
+) -> tuple[int, BufferedInputFile | None]:
+    low = u.lower()
+    if low.endswith(".svg") or ".svg?" in low:
+        return ordinal, None
+    try:
+        async with sem:
+            r = await client.get(u)
+        if r.status_code != 200 or not r.content:
+            return ordinal, None
+        ct = r.headers.get("content-type")
+        if ct:
+            ctn = ct.split(";")[0].lower()
+            if "svg" in ctn:
+                return ordinal, None
+            if "image" not in ctn:
+                return ordinal, None
+        name = _filename_for_url(u, ct, ordinal)
+        content = r.content
+        if len(content) > _MAX_TELEGRAM_PHOTO_BYTES or (
+            ct and "image/" in ct and "jpeg" not in ct.lower()
+        ):
+            norm = await asyncio.to_thread(_try_normalize_image_bytes, content)
+            if norm and len(norm) <= _MAX_TELEGRAM_PHOTO_BYTES:
+                content = norm
+                name = f"photo_{ordinal}.jpg"
+        return ordinal, BufferedInputFile(content, filename=name)
+    except Exception as e:
+        log.debug("listing_image_fetch_failed", url=u[:120], err=str(e))
+        return ordinal, None
+
+
 async def fetch_listing_images(
     urls: list[str],
     *,
     limit: int = 10,
     timeout: float = 45.0,
+    download_concurrency: int = 4,
 ) -> list[BufferedInputFile]:
     """Скачивает картинки на сервер бота — Telegram часто не тянет CDN-URL напрямую."""
-    out: list[BufferedInputFile] = []
+    capped = urls[:limit]
+    sem = asyncio.Semaphore(max(1, download_concurrency))
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=True,
         headers=_CLIENT_HEADERS,
     ) as client:
-        for i, u in enumerate(urls[:limit]):
-            low = u.lower()
-            if low.endswith(".svg") or ".svg?" in low:
-                continue
-            try:
-                r = await client.get(u)
-                if r.status_code != 200 or not r.content:
-                    continue
-                ct = r.headers.get("content-type")
-                if ct:
-                    ctn = ct.split(";")[0].lower()
-                    if "svg" in ctn:
-                        continue
-                    if "image" not in ctn:
-                        continue
-                name = _filename_for_url(u, ct, len(out))
-                content = r.content
-                if len(content) > _MAX_TELEGRAM_PHOTO_BYTES or (ct and "image/" in ct and "jpeg" not in ct.lower()):
-                    norm = _try_normalize_image_bytes(content)
-                    if norm and len(norm) <= _MAX_TELEGRAM_PHOTO_BYTES:
-                        content = norm
-                        name = f"photo_{len(out)}.jpg"
-                out.append(BufferedInputFile(content, filename=name))
-            except Exception as e:
-                log.debug("listing_image_fetch_failed", url=u[:120], err=str(e))
-                continue
-    return out
+        pairs = await asyncio.gather(
+            *[
+                _fetch_one_listing_image(client, sem, i, u)
+                for i, u in enumerate(capped)
+            ],
+            return_exceptions=True,
+        )
+    out_ord: list[tuple[int, BufferedInputFile]] = []
+    for p in pairs:
+        if isinstance(p, Exception):
+            log.warning("listing_image_worker_error", err=str(p))
+            continue
+        ord_i, bf = p
+        if bf is not None:
+            out_ord.append((ord_i, bf))
+    out_ord.sort(key=lambda x: x[0])
+    return [bf for _, bf in out_ord]
 
 
 class ChannelPublisher:
@@ -187,7 +215,14 @@ class ChannelPublisher:
             urls_clean=len(clean_urls),
             gallery_max=hi,
         )
-        files = await fetch_listing_images(clean_urls, limit=len(clean_urls))
+        conc = 4
+        if self._settings is not None:
+            conc = self._settings.image_download_concurrency
+        files = await fetch_listing_images(
+            clean_urls,
+            limit=len(clean_urls),
+            download_concurrency=conc,
+        )
         if len(files) > hi:
             files = files[:hi]
         log.info(

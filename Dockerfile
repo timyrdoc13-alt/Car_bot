@@ -16,7 +16,7 @@ COPY car_channel_bot ./car_channel_bot
 
 # Зависимости приложения и веб-монитора, затем браузер Playwright (тяжёлый слой)
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir ".[monitoring]" \
+    && pip install --no-cache-dir ".[monitoring,queue]" \
     && playwright install --with-deps chromium \
     && rm -rf /root/.cache/pip
 

@@ -6,7 +6,6 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import structlog
-from playwright.async_api import async_playwright
 
 from car_channel_bot.config.settings import Settings
 from car_channel_bot.parsers import common as C
@@ -18,6 +17,7 @@ from car_channel_bot.parsers.mashina_search_url import (
     finalize_mashina_list_url,
     trace_step,
 )
+from car_channel_bot.parsers.playwright_shared import shared_chromium
 
 log = structlog.get_logger()
 
@@ -124,100 +124,99 @@ class MashinaListingSource:
         max_rounds = int(filters.get("mashina_scroll_max_rounds") or 14)
         stable_needed = int(filters.get("mashina_scroll_stable_needed") or 2)
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self._settings.playwright_headless)
-            try:
-                ctx = await browser.new_context(
-                    user_agent=ua,
-                    locale="ru-RU",
-                    viewport={"width": 390, "height": 844},
-                )
-                page = await ctx.new_page()
-                hrefs: list[str] = []
-                href_seen: set[str] = set()
-                page_probe: list[dict[str, Any]] = []
-                for page_num in range(1, pages + 1):
-                    paged_url = _with_page(list_url, page_num)
-                    resp = await page.goto(paged_url, wait_until="load", timeout=90_000)
-                    final_url = page.url
-                    status = resp.status if resp else None
-                    if page_num == 1:
-                        trace_step(
-                            trace,
-                            step="goto_list",
-                            expected="HTTP 200, редирект на m.mashina.kg",
-                            got={"status": status, "final_url": final_url},
-                            ok=status == 200 if status is not None else None,
-                        )
-                    details_ok = False
-                    try:
-                        await page.wait_for_selector('a[href*="/details/"]', timeout=35_000)
-                        details_ok = True
-                    except Exception:
-                        log.warning("mashina_search_no_details_timeout", page=page_num)
-                    if page_num == 1:
-                        trace_step(
-                            trace,
-                            step="wait_details_links",
-                            expected="есть a[href*=\"/details/\"] на выдаче",
-                            got=details_ok,
-                            ok=details_ok,
-                        )
-                    if page_num == 1:
-                        ad_item_ok = False
-                        try:
-                            await page.wait_for_selector('[data-testid="ad-item"]', timeout=4_000)
-                            ad_item_ok = True
-                        except Exception:
-                            pass
-                        trace_step(
-                            trace,
-                            step="wait_ad_item_optional",
-                            expected="опционально [data-testid=\"ad-item\"]",
-                            got=ad_item_ok,
-                            note="не критично если нет",
-                        )
-
-                    rounds, final_h = await C.scroll_until_height_stable(
-                        page,
-                        step_px=1400,
-                        pause_s=scroll_pause,
-                        max_rounds=max_rounds,
-                        stable_needed=stable_needed,
+        browser = await shared_chromium(headless=self._settings.playwright_headless)
+        ctx = await browser.new_context(
+            user_agent=ua,
+            locale="ru-RU",
+            viewport={"width": 390, "height": 844},
+        )
+        try:
+            page = await ctx.new_page()
+            hrefs: list[str] = []
+            href_seen: set[str] = set()
+            page_probe: list[dict[str, Any]] = []
+            for page_num in range(1, pages + 1):
+                paged_url = _with_page(list_url, page_num)
+                resp = await page.goto(paged_url, wait_until="load", timeout=90_000)
+                final_url = page.url
+                status = resp.status if resp else None
+                if page_num == 1:
+                    trace_step(
+                        trace,
+                        step="goto_list",
+                        expected="HTTP 200, редирект на m.mashina.kg",
+                        got={"status": status, "final_url": final_url},
+                        ok=status == 200 if status is not None else None,
                     )
-                    if page_num == 1:
-                        trace_step(
-                            trace,
-                            step="scroll_infinite",
-                            expected="scrollHeight стабилизируется после подгрузки карточек",
-                            got={"rounds": rounds, "scroll_height": final_h, "pause_s": scroll_pause},
-                        )
-                    await C.scroll_page(page, rounds=3, step_px=900, pause_s=min(0.6, scroll_pause))
-                    await C.delay_after_navigation(page, self._delay)
+                details_ok = False
+                try:
+                    await page.wait_for_selector('a[href*="/details/"]', timeout=35_000)
+                    details_ok = True
+                except Exception:
+                    log.warning("mashina_search_no_details_timeout", page=page_num)
+                if page_num == 1:
+                    trace_step(
+                        trace,
+                        step="wait_details_links",
+                        expected="есть a[href*=\"/details/\"] на выдаче",
+                        got=details_ok,
+                        ok=details_ok,
+                    )
+                if page_num == 1:
+                    ad_item_ok = False
+                    try:
+                        await page.wait_for_selector('[data-testid="ad-item"]', timeout=4_000)
+                        ad_item_ok = True
+                    except Exception:
+                        pass
+                    trace_step(
+                        trace,
+                        step="wait_ad_item_optional",
+                        expected="опционально [data-testid=\"ad-item\"]",
+                        got=ad_item_ok,
+                        note="не критично если нет",
+                    )
 
-                    page_hrefs: list[str] = await page.evaluate(
-                        """() => {
+                rounds, final_h = await C.scroll_until_height_stable(
+                    page,
+                    step_px=1400,
+                    pause_s=scroll_pause,
+                    max_rounds=max_rounds,
+                    stable_needed=stable_needed,
+                )
+                if page_num == 1:
+                    trace_step(
+                        trace,
+                        step="scroll_infinite",
+                        expected="scrollHeight стабилизируется после подгрузки карточек",
+                        got={"rounds": rounds, "scroll_height": final_h, "pause_s": scroll_pause},
+                    )
+                await C.scroll_page(page, rounds=3, step_px=900, pause_s=min(0.6, scroll_pause))
+                await C.delay_after_navigation(page, self._delay)
+
+                page_hrefs: list[str] = await page.evaluate(
+                    """() => {
                           const out = new Set();
                           for (const a of document.querySelectorAll('a[href*="/details/"]')) {
                             if (a.href) out.add(a.href);
                           }
                           return [...out];
                         }"""
-                    )
-                    added = 0
-                    for h in page_hrefs:
-                        if h in href_seen:
-                            continue
-                        href_seen.add(h)
-                        hrefs.append(h)
-                        added += 1
-                    page_probe.append(
-                        {"page": page_num, "url": paged_url, "status": status, "hrefs": len(page_hrefs), "new": added}
-                    )
-                    if len(hrefs) >= collect_target:
-                        break
-            finally:
-                await browser.close()
+                )
+                added = 0
+                for h in page_hrefs:
+                    if h in href_seen:
+                        continue
+                    href_seen.add(h)
+                    hrefs.append(h)
+                    added += 1
+                page_probe.append(
+                    {"page": page_num, "url": paged_url, "status": status, "hrefs": len(page_hrefs), "new": added}
+                )
+                if len(hrefs) >= collect_target:
+                    break
+        finally:
+            await ctx.close()
 
         trace_step(
             trace,
@@ -279,88 +278,87 @@ class MashinaListingSource:
         price_usd: str | None = None
         image_urls: list[str] = []
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self._settings.playwright_headless)
-            try:
-                ctx = await browser.new_context(
-                    user_agent=C.MOBILE_USER_AGENT,
-                    locale="ru-RU",
-                    viewport={"width": 390, "height": 844},
-                )
-                page = await ctx.new_page()
-                trace_step(
-                    trace,
-                    step="detail_goto",
-                    expected="страница объявления загрузилась",
-                    got={"url": ref.url},
-                )
-                resp = await page.goto(ref.url, wait_until="domcontentloaded", timeout=90_000)
-                status = resp.status if resp else None
-                trace_step(
-                    trace,
-                    step="detail_response",
-                    expected="HTTP 200",
-                    got={"status": status, "final_url": page.url},
-                    ok=status == 200 if status is not None else None,
-                )
-                await C.delay_after_navigation(page, self._delay)
+        browser = await shared_chromium(headless=self._settings.playwright_headless)
+        ctx = await browser.new_context(
+            user_agent=C.MOBILE_USER_AGENT,
+            locale="ru-RU",
+            viewport={"width": 390, "height": 844},
+        )
+        try:
+            page = await ctx.new_page()
+            trace_step(
+                trace,
+                step="detail_goto",
+                expected="страница объявления загрузилась",
+                got={"url": ref.url},
+            )
+            resp = await page.goto(ref.url, wait_until="domcontentloaded", timeout=90_000)
+            status = resp.status if resp else None
+            trace_step(
+                trace,
+                step="detail_response",
+                expected="HTTP 200",
+                got={"status": status, "final_url": page.url},
+                ok=status == 200 if status is not None else None,
+            )
+            await C.delay_after_navigation(page, self._delay)
 
-                html = await C.get_page_html(page)
-                next_data = EJ.extract_next_data_json(html)
-                ld_blocks = EJ.extract_json_ld_blocks(html)
+            html = await C.get_page_html(page)
+            next_data = EJ.extract_next_data_json(html)
+            ld_blocks = EJ.extract_json_ld_blocks(html)
 
-                trace_step(
-                    trace,
-                    step="detail_embed_parse",
-                    expected="__NEXT_DATA__ и/или JSON-LD",
-                    got={
-                        "next_data_keys_sample": list(next_data.keys())[:8] if isinstance(next_data, dict) else None,
-                        "json_ld_blocks": len(ld_blocks),
-                    },
-                    ok=bool(next_data) or len(ld_blocks) > 0,
-                )
+            trace_step(
+                trace,
+                step="detail_embed_parse",
+                expected="__NEXT_DATA__ и/или JSON-LD",
+                got={
+                    "next_data_keys_sample": list(next_data.keys())[:8] if isinstance(next_data, dict) else None,
+                    "json_ld_blocks": len(ld_blocks),
+                },
+                ok=bool(next_data) or len(ld_blocks) > 0,
+            )
 
-                price_embed = EJ.usd_price_from_json_ld(ld_blocks)
-                if next_data and not price_embed:
-                    price_embed = EJ.usd_price_from_next_data(next_data)
-                title_embed = EJ.title_from_json_ld(ld_blocks)
+            price_embed = EJ.usd_price_from_json_ld(ld_blocks)
+            if next_data and not price_embed:
+                price_embed = EJ.usd_price_from_next_data(next_data)
+            title_embed = EJ.title_from_json_ld(ld_blocks)
 
-                title_dom, body_text = await C.extract_title_and_body(page)
-                title = (title_embed or title_dom or "").strip()
-                price_usd = LF.pick_price_usd(
-                    price_embed,
-                    C.extract_usd_price_from_text(body_text),
-                )
+            title_dom, body_text = await C.extract_title_and_body(page)
+            title = (title_embed or title_dom or "").strip()
+            price_usd = LF.pick_price_usd(
+                price_embed,
+                C.extract_usd_price_from_text(body_text),
+            )
 
-                trace_step(
-                    trace,
-                    step="detail_fields",
-                    expected="title и price_usd из embed или DOM",
-                    got={
-                        "title_len": len(title),
-                        "price_usd": price_usd,
-                        "body_len": len(body_text),
-                    },
-                    ok=bool(title.strip()),
-                )
+            trace_step(
+                trace,
+                step="detail_fields",
+                expected="title и price_usd из embed или DOM",
+                got={
+                    "title_len": len(title),
+                    "price_usd": price_usd,
+                    "body_len": len(body_text),
+                },
+                ok=bool(title.strip()),
+            )
 
-                img_ld = EJ.images_from_json_ld(ld_blocks, limit=12)
-                img_dom = await C.collect_image_urls(
-                    page,
-                    ref.url,
-                    domain_hints=("mashina", "cdn", "photo", "product", "upload"),
-                    limit=12,
-                )
-                image_urls = _merge_urls(img_ld, img_dom, 12)
-                trace_step(
-                    trace,
-                    step="detail_images",
-                    expected="1+ картинок из LD или DOM",
-                    got={"count": len(image_urls), "json_ld": len(img_ld), "dom": len(img_dom)},
-                    ok=len(image_urls) > 0,
-                )
-            finally:
-                await browser.close()
+            img_ld = EJ.images_from_json_ld(ld_blocks, limit=12)
+            img_dom = await C.collect_image_urls(
+                page,
+                ref.url,
+                domain_hints=("mashina", "cdn", "photo", "product", "upload"),
+                limit=12,
+            )
+            image_urls = _merge_urls(img_ld, img_dom, 12)
+            trace_step(
+                trace,
+                step="detail_images",
+                expected="1+ картинок из LD или DOM",
+                got={"count": len(image_urls), "json_ld": len(img_ld), "dom": len(img_dom)},
+                ok=len(image_urls) > 0,
+            )
+        finally:
+            await ctx.close()
 
         desc = C.trim_description(body_text, title_dom)
         field_map = LF.build_standard_fields(

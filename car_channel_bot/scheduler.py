@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import structlog
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from car_channel_bot.config.settings import Settings
-from car_channel_bot.db.repositories import Database
-from car_channel_bot.services.auto_batch_ui import assign_auto_item_keys, send_auto_batch_previews_to_admin
-from car_channel_bot.services.auto_pipeline import build_auto_batch_items
+from car_channel_bot.services.pipeline_queue import enqueue_scheduler_auto_batch, pipeline_queue_enabled
+from car_channel_bot.services.scheduled_auto_batch import build_batch_and_notify, parse_scheduler_filters
 
 if TYPE_CHECKING:
     from aiogram import Dispatcher
 
 log = structlog.get_logger()
+
 
 def setup_scheduler(_bot: Bot, dp: Dispatcher, settings: Settings) -> AsyncIOScheduler | None:
     cron = (settings.auto_schedule_cron or "").strip()
@@ -25,64 +24,33 @@ def setup_scheduler(_bot: Bot, dp: Dispatcher, settings: Settings) -> AsyncIOSch
     sched = AsyncIOScheduler()
 
     async def job() -> None:
-        try:
-            filters: dict[str, Any] = json.loads(settings.auto_schedule_filters_json or "{}")
-        except json.JSONDecodeError:
-            filters = {"limit": 5}
-        db: Database = dp.workflow_data["db"]
-        listing_source = dp.workflow_data["listing_source"]
-        llm = dp.workflow_data["llm"]
+        filters = parse_scheduler_filters(settings)
         job_bot: Bot = dp.workflow_data["bot"]
         admins = settings.admin_id_list
         if not admins:
             log.warning("scheduler_skip_no_admins")
             return
 
-        stats: dict[str, Any] = {}
-        items = await build_auto_batch_items(
-            listing_source=listing_source,
-            llm=llm,
+        if pipeline_queue_enabled(settings):
+            try:
+                await enqueue_scheduler_auto_batch(settings, filters, skip_dedupe=False)
+            except Exception as e:
+                log.error("scheduler_enqueue_failed", error=str(e), exc_info=True)
+            return
+
+        db = dp.workflow_data["db"]
+        listing_source = dp.workflow_data["listing_source"]
+        llm = dp.workflow_data["llm"]
+        await build_batch_and_notify(
+            bot=job_bot,
             db=db,
             settings=settings,
+            listing_source=listing_source,
+            llm=llm,
             filters=filters,
             skip_dedupe=False,
-            pipeline_stats=stats,
+            intro_prefix="⏰ Автопостинг по расписанию\n",
         )
-        if not items:
-            log.info("scheduler_auto_run", count=0, note="no_new_items", **stats)
-            return
-
-        admin_id = admins[0]
-        keyed = assign_auto_item_keys(items)
-        batch_id = await db.create_auto_batch(
-            admin_id=admin_id,
-            filters=filters,
-            items=keyed,
-        )
-        await db.insert_event(
-            "scheduler_batch_ready",
-            {"batch_id": batch_id, "count": len(keyed), "admin_id": admin_id},
-        )
-
-        try:
-            await send_auto_batch_previews_to_admin(
-                job_bot,
-                admin_id,
-                batch_id,
-                keyed,
-                intro_prefix="⏰ Автопостинг по расписанию\n",
-                gallery_max_photos=settings.channel_gallery_max_photos,
-            )
-        except Exception as e:
-            log.error(
-                "scheduler_notify_admin_failed",
-                admin_id=admin_id,
-                error=str(e),
-                exc_info=True,
-            )
-            return
-
-        log.info("scheduler_auto_run", count=len(items), batch_id=batch_id, admin_id=admin_id)
 
     parts = cron.split()
     if len(parts) != 5:

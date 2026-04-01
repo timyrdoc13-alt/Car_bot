@@ -22,10 +22,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0", "ruff>=0.8.0"]
 monitoring = ["fastapi>=0.115.0", "uvicorn[standard]>=0.32.0"]
+queue = ["redis>=5.0.0,<6"]
 
 [project.scripts]
 car-bot = "car_channel_bot.main:main"
 car-mashina-monitor = "car_channel_bot.monitoring.run:main"
+car-pipeline-worker = "car_channel_bot.pipeline_worker:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
