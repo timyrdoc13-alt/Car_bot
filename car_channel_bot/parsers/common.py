@@ -115,23 +115,77 @@ async def collect_image_urls(
     *,
     domain_hints: tuple[str, ...],
     limit: int = 12,
+    listing_path: str | None = None,
 ) -> list[str]:
-    """Собирает img[src], фильтруя по подстрокам домена/пути (нижний регистр)."""
+    """Собирает img[src], фильтруя по подстрокам домена/пути (нижний регистр).
+
+    Если задан listing_path (pathname текущего объявления), не берём картинки из превью,
+    обёрнутых в ссылку на *другое* объявление (блок «похожие» на Mashina / Lalafo).
+    """
     hints_js = list(domain_hints)
+    path_arg = listing_path or ""
     raw: list[str | None] = await page.evaluate(
-        """(hints) => {
+        """([hints, listingPath]) => {
           const out = [];
           const hl = hints.map(h => h.toLowerCase());
-          for (const el of document.querySelectorAll('img[src]')) {
-            const s = el.getAttribute('src');
+          const norm = (hrefOrPath) => {
+            try {
+              if (!hrefOrPath) return '';
+              const u = hrefOrPath.startsWith('http')
+                ? new URL(hrefOrPath)
+                : new URL(hrefOrPath, window.location.origin);
+              const p = u.pathname || '';
+              return p.replace(/\\/+$/, '');
+            } catch (e) {
+              return '';
+            }
+          };
+          const current = norm(listingPath);
+          const fromSrcset = (srcset) => {
+            if (!srcset) return '';
+            const parts = String(srcset)
+              .split(',')
+              .map(x => x.trim().split(/\\s+/)[0])
+              .filter(Boolean);
+            return parts.length ? parts[parts.length - 1] : '';
+          };
+          const pickSrc = (el) => {
+            const attrs = [
+              'src',
+              'data-src',
+              'data-lazy-src',
+              'data-original',
+              'data-lazy',
+            ];
+            for (const a of attrs) {
+              const v = el.getAttribute(a);
+              if (v) return v;
+            }
+            const ss = fromSrcset(el.getAttribute('srcset') || el.getAttribute('data-srcset'));
+            if (ss) return ss;
+            return '';
+          };
+          const imageSelector = 'main img, #__next img, main picture source, #__next picture source';
+          for (const el of document.querySelectorAll(imageSelector)) {
+            const s = pickSrc(el);
             if (!s) continue;
             const l = s.toLowerCase();
             if (l.includes('logo') || l.includes('avatar') || l.includes('favicon')) continue;
-            if (hl.some(h => l.includes(h))) out.push(s);
+            if (current) {
+              const a = el.closest('a[href]');
+              if (a) {
+                const href = a.getAttribute('href') || '';
+                const isOtherListing =
+                  (href.includes('/details/') || href.includes('-id-')) &&
+                  norm(href) !== current;
+                if (isOtherListing) continue;
+              }
+            }
+            if (hl.some(h => h && l.includes(h))) out.push(s);
           }
           return out;
         }""",
-        hints_js,
+        [hints_js, path_arg],
     )
     seen: set[str] = set()
     out: list[str] = []

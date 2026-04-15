@@ -114,6 +114,44 @@ def _as_offer_list(offers: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _ld_type_set(d: dict[str, Any]) -> set[str]:
+    t = d.get("@type")
+    if t is None:
+        return set()
+    if isinstance(t, list):
+        return {str(x) for x in t if x is not None}
+    return {str(t)}
+
+
+# Не лезем в блоки «похожие», каталоги и служебные схемы — иначе подтягиваются чужие фото.
+_LD_SKIP_WHOLE_SUBTREE_TYPES = frozenset(
+    {
+        "ItemList",
+        "OfferCatalog",
+        "FAQPage",
+        "BreadcrumbList",
+        "Question",
+        "Answer",
+        "WebPage",
+        "SearchResultsPage",
+    }
+)
+_LD_SKIP_RECURSE_KEYS = frozenset(
+    {
+        "itemListElement",
+        "relatedProducts",
+        "relatedAds",
+        "related",
+        "similarListings",
+        "similar",
+        "featuredListings",
+        "recommendedListings",
+        "recommended",
+        "breadcrumb",
+    }
+)
+
+
 def images_from_json_ld(blocks: list[dict[str, Any]], limit: int = 12) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -128,6 +166,8 @@ def _collect_images(obj: Any, seen: set[str], out: list[str], limit: int) -> Non
     if len(out) >= limit:
         return
     if isinstance(obj, dict):
+        if _ld_type_set(obj) & _LD_SKIP_WHOLE_SUBTREE_TYPES:
+            return
         if obj.get("@type") in ("ImageObject", ["ImageObject"]):
             u = obj.get("url") or obj.get("contentUrl")
             if isinstance(u, str) and u.startswith("http") and u not in seen:
@@ -144,7 +184,9 @@ def _collect_images(obj: Any, seen: set[str], out: list[str], limit: int) -> Non
                     out.append(x)
                 elif isinstance(x, dict):
                     _collect_images(x, seen, out, limit)
-        for v in obj.values():
+        for k, v in obj.items():
+            if k in _LD_SKIP_RECURSE_KEYS or k == "image":
+                continue
             _collect_images(v, seen, out, limit)
     elif isinstance(obj, list):
         for x in obj:

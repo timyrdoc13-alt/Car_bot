@@ -80,10 +80,11 @@ class MashinaListingSource:
     async def search(self, filters: dict[str, Any]) -> list[ListingRef]:
         limit = int(filters.get("limit", 10))
         limit = max(1, min(limit, 30))
-        # Собираем расширенный пул: после дедупа в БД могут отвалиться первые N ссылок.
-        collect_target = int(filters.get("mashina_collect_target") or max(limit * 4, 40))
+        # По умолчанию на выдаче берём ровно limit ссылок; больший пул — только через
+        # mashina_collect_target (например, если после дедупа часто пустой батч).
+        collect_target = int(filters.get("mashina_collect_target") or limit)
         collect_target = max(limit, min(collect_target, 160))
-        pages = int(filters.get("mashina_pages") or max(2, min(8, (collect_target + 19) // 20)))
+        pages = int(filters.get("mashina_pages") or max(1, min(12, (collect_target + 19) // 20)))
         pages = max(1, min(pages, 12))
         list_url, applied = self._search_url(filters)
         list_url, applied = finalize_mashina_list_url(list_url)
@@ -249,7 +250,7 @@ class MashinaListingSource:
         trace_step(
             trace,
             step="filter_model_limit",
-            expected=f"пул до {collect_target} ссылок (для дедупа/вариативности), лимит UI={limit}",
+            expected=f"до {collect_target} ссылок (по умолчанию = limit={limit}), лимит UI={limit}",
             got={
                 "kept": len(refs),
                 "limit": limit,
@@ -348,6 +349,7 @@ class MashinaListingSource:
                 ref.url,
                 domain_hints=("mashina", "cdn", "photo", "product", "upload"),
                 limit=12,
+                listing_path=urlparse(ref.url).path,
             )
             image_urls = _merge_urls(img_ld, img_dom, 12)
             trace_step(

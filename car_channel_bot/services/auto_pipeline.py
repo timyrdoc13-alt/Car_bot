@@ -16,6 +16,14 @@ from car_channel_bot.services.text_sanitize import caption_without_urls
 log = structlog.get_logger()
 
 
+def _parse_int_range(raw: Any, *, default: int, low: int, high: int) -> int:
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        v = default
+    return max(low, min(v, high))
+
+
 async def build_auto_batch_items(
     *,
     listing_source: ListingSource,
@@ -26,8 +34,22 @@ async def build_auto_batch_items(
     skip_dedupe: bool = False,
     pipeline_stats: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
+    target_limit = _parse_int_range(filters.get("limit"), default=5, low=1, high=30)
+    search_filters = dict(filters)
+    default_collect = min(target_limit * 4, 160)
+    collect_target = _parse_int_range(
+        search_filters.get("collect_target"),
+        default=default_collect,
+        low=target_limit,
+        high=160,
+    )
+    # Источники могут игнорировать collect_target, но если поддерживают — добирают пул
+    # кандидатов до дедупа и quality-фильтра.
+    search_filters.setdefault("collect_target", collect_target)
+    search_filters.setdefault("mashina_collect_target", collect_target)
+
     t0 = time.perf_counter()
-    refs = await listing_source.search(filters)
+    refs = await listing_source.search(search_filters)
     search_s = round(time.perf_counter() - t0, 3)
     log.info(
         "auto_pipeline_search",
@@ -37,6 +59,8 @@ async def build_auto_batch_items(
         detail_concurrency=settings.auto_detail_concurrency,
         llm_concurrency=settings.auto_llm_concurrency,
         phase_duration_s=search_s,
+        target_limit=target_limit,
+        collect_target=collect_target,
     )
     log.info("auto_pipeline_phase", phase="search", duration_s=search_s, refs_found=len(refs))
 
@@ -49,6 +73,8 @@ async def build_auto_batch_items(
             skipped_dedupe += 1
             continue
         kept_refs.append((idx, ref))
+
+    refs_after_dedup = len(kept_refs)
 
     detail_sem = asyncio.Semaphore(max(1, settings.auto_detail_concurrency))
     llm_sem = asyncio.Semaphore(max(1, settings.auto_llm_concurrency))
@@ -124,6 +150,15 @@ async def build_auto_batch_items(
 
     items_by_idx.sort(key=lambda x: x[0])
     items = [it for _, it in items_by_idx]
+    if len(items) > target_limit:
+        before = len(items)
+        items = items[:target_limit]
+        log.info(
+            "auto_pipeline_items_capped",
+            target_limit=target_limit,
+            before=before,
+            after=len(items),
+        )
 
     log.info(
         "auto_pipeline_batch_complete",
@@ -140,6 +175,9 @@ async def build_auto_batch_items(
                 "listing_source": listing_source.__class__.__name__,
                 "refs_found": len(refs),
                 "skipped_dedupe": skipped_dedupe,
+                "kept_refs_after_dedup": refs_after_dedup,
+                "target_limit": target_limit,
+                "collect_target": collect_target,
                 "detail_errors": detail_errors,
                 "quality_skipped": quality_skipped,
                 "items_built": len(items),

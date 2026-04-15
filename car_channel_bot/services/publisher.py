@@ -252,15 +252,31 @@ class ChannelPublisher:
 
             return await _telegram_with_flood_retry(_one)
 
-        media: list[InputMediaPhoto] = []
-        for i, bf in enumerate(files):
-            c = cap if i == 0 else None
-            media.append(InputMediaPhoto(media=bf, caption=c))
-
         async def _album() -> int | None:
+            attempt_files = list(files)
+            while len(attempt_files) >= 2:
+                media: list[InputMediaPhoto] = []
+                for i, bf in enumerate(attempt_files):
+                    c = cap if i == 0 else None
+                    media.append(InputMediaPhoto(media=bf, caption=c))
+                try:
+                    msgs = await self._bot.send_media_group(self._channel_id, media=media)
+                    return msgs[0].message_id if msgs else None
+                except TelegramBadRequest as e:
+                    log.warning(
+                        "channel_album_rejected_retry_smaller",
+                        err=str(e),
+                        try_files=len(attempt_files),
+                        urls_clean=len(clean_urls),
+                        bytes=[len(f.data) for f in attempt_files[:6]],
+                    )
+                    attempt_files = attempt_files[:-1]
+
             try:
-                msgs = await self._bot.send_media_group(self._channel_id, media=media)
-                return msgs[0].message_id if msgs else None
+                msg = await self._bot.send_photo(
+                    self._channel_id, files[0], caption=cap or None
+                )
+                return msg.message_id
             except TelegramBadRequest as e:
                 log.warning(
                     "channel_album_rejected_try_single",
@@ -269,18 +285,8 @@ class ChannelPublisher:
                     files=len(files),
                     bytes=[len(f.data) for f in files[:6]],
                 )
-                try:
-                    msg = await self._bot.send_photo(
-                        self._channel_id, files[0], caption=cap or None
-                    )
-                    return msg.message_id
-                except TelegramBadRequest as e2:
-                    log.warning(
-                        "channel_single_photo_rejected_fallback_text",
-                        err=str(e2),
-                    )
-                    msg = await self._bot.send_message(self._channel_id, cap or ".")
-                    return msg.message_id
+                msg = await self._bot.send_message(self._channel_id, cap or ".")
+                return msg.message_id
 
         return await _telegram_with_flood_retry(_album)
 

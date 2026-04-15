@@ -42,6 +42,8 @@ class LalafoListingSource:
     async def search(self, filters: dict[str, Any]) -> list[ListingRef]:
         limit = int(filters.get("limit", 10))
         limit = max(1, min(limit, 30))
+        collect_target = int(filters.get("collect_target") or limit)
+        collect_target = max(limit, min(collect_target, 160))
         list_url = self._search_url(filters)
 
         browser = await shared_chromium(headless=self._settings.playwright_headless)
@@ -78,7 +80,7 @@ class LalafoListingSource:
                 continue
             seen.add(norm)
             refs.append(ListingRef(url=norm, source="lalafo.kg"))
-            if len(refs) >= limit:
+            if len(refs) >= collect_target:
                 break
 
         log.info(
@@ -86,6 +88,8 @@ class LalafoListingSource:
             source="lalafo",
             refs_found=len(hrefs),
             refs_kept=len(refs),
+            limit=limit,
+            collect_target=collect_target,
             list_url=list_url,
         )
         return refs
@@ -120,6 +124,7 @@ class LalafoListingSource:
                 ref.url,
                 domain_hints=("lalafo", "static", "cdn"),
                 limit=12,
+                listing_path=urlparse(ref.url).path,
             )
             image_urls = _merge_urls(img_ld, img_dom, 12)
         finally:

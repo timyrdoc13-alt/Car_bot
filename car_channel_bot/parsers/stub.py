@@ -11,7 +11,7 @@ class StubListingSource:
         limit = int(filters.get("limit", 5))
         model = (filters.get("model") or "Demo").strip()
         refs: list[ListingRef] = []
-        for i in range(max(1, min(limit, 20))):
+        for i in range(max(1, min(limit, 30))):
             refs.append(
                 ListingRef(
                     url=f"https://stub.example/listing/{model.lower()}-{i + 1}",

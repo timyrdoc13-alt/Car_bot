@@ -29,3 +29,16 @@ def test_sanitize_drops_svg_even_in_other_host() -> None:
         max_photos=6,
     )
     assert out == ["https://example.com/car.jpg"]
+
+
+def test_sanitize_drops_mashina_tiny_user_avatar() -> None:
+    out = sanitize_vehicle_image_urls(
+        [
+            "https://im.mashina.kg/tachka/images//users/d/c/7/dc720b24e4df0ea2aa787b618f4f1b4d_60x60.jpg",
+            "https://im.mashina.kg/tachka/images//e/a/b/eab3233d3a02dc6ee3460a2602b94da6_640x480.jpg",
+        ],
+        max_photos=6,
+    )
+    assert out == [
+        "https://im.mashina.kg/tachka/images//e/a/b/eab3233d3a02dc6ee3460a2602b94da6_640x480.jpg"
+    ]
