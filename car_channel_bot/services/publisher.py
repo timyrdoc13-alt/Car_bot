@@ -25,6 +25,7 @@ T = TypeVar("T")
 
 _MAX_TELEGRAM_PHOTO_BYTES = 9_000_000  # guardrail: oversized photos often break albums
 _JPEG_MAX_SIDE = 1600
+_MIN_PHOTO_SIDE = 260
 
 
 async def _telegram_with_flood_retry(
@@ -106,6 +107,31 @@ def _try_normalize_image_bytes(raw: bytes) -> bytes:
         return raw
 
 
+def _normalize_or_drop_image(raw: bytes) -> bytes | None:
+    """Normalize image and drop obvious UI/thumbnail artifacts."""
+    try:
+        from io import BytesIO
+
+        from PIL import Image, ImageOps
+    except Exception:
+        # Without Pillow we cannot validate dimensions; keep original behavior.
+        return raw
+
+    try:
+        with Image.open(BytesIO(raw)) as im:
+            im = ImageOps.exif_transpose(im)
+            w, h = im.size
+            # Drop tiny assets (icons, scroll controls, avatars).
+            if min(w, h) < _MIN_PHOTO_SIDE:
+                return None
+            norm = _try_normalize_image_bytes(raw)
+            if not norm:
+                return None
+            return norm
+    except Exception:
+        return None
+
+
 async def _fetch_one_listing_image(
     client: httpx.AsyncClient,
     sem: asyncio.Semaphore,
@@ -128,14 +154,15 @@ async def _fetch_one_listing_image(
             if "image" not in ctn:
                 return ordinal, None
         name = _filename_for_url(u, ct, ordinal)
-        content = r.content
-        if len(content) > _MAX_TELEGRAM_PHOTO_BYTES or (
-            ct and "image/" in ct and "jpeg" not in ct.lower()
+        content = await asyncio.to_thread(_normalize_or_drop_image, r.content)
+        if not content:
+            return ordinal, None
+        if len(content) > _MAX_TELEGRAM_PHOTO_BYTES:
+            return ordinal, None
+        if (ct and "image/" in ct and "jpeg" not in ct.lower()) or name.lower().endswith(
+            (".png", ".webp", ".gif")
         ):
-            norm = await asyncio.to_thread(_try_normalize_image_bytes, content)
-            if norm and len(norm) <= _MAX_TELEGRAM_PHOTO_BYTES:
-                content = norm
-                name = f"photo_{ordinal}.jpg"
+            name = f"photo_{ordinal}.jpg"
         return ordinal, BufferedInputFile(content, filename=name)
     except Exception as e:
         log.debug("listing_image_fetch_failed", url=u[:120], err=str(e))
@@ -270,7 +297,10 @@ class ChannelPublisher:
                         urls_clean=len(clean_urls),
                         bytes=[len(f.data) for f in attempt_files[:6]],
                     )
-                    attempt_files = attempt_files[:-1]
+                    # If one bad file is not the last one, tail-chop is often insufficient.
+                    # Try removing largest file first to quickly bypass problematic assets.
+                    drop_idx = max(range(len(attempt_files)), key=lambda i: len(attempt_files[i].data))
+                    attempt_files = [f for i, f in enumerate(attempt_files) if i != drop_idx]
 
             try:
                 msg = await self._bot.send_photo(

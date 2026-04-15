@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -21,6 +22,10 @@ from car_channel_bot.parsers.playwright_shared import shared_chromium
 
 log = structlog.get_logger()
 
+_MASHINA_TACHKA_URL_RE = re.compile(r"https://im\.mashina\.kg/tachka/images/[^\"'\s)]+", re.I)
+_MASHINA_DIM_RE = re.compile(r"_(\d{2,4})x(\d{2,4})(?:\.[a-z0-9]+)?(?:\?|$)", re.I)
+_MASHINA_SIZE_TOKEN_RE = re.compile(r"_(\d{2,4})x(\d{2,4})(?=\.[a-z0-9]+(?:\?|$))", re.I)
+
 
 def _normalize_mashina_url(url: str) -> str:
     raw = url.strip().split("?", maxsplit=1)[0]
@@ -33,6 +38,57 @@ def _normalize_mashina_url(url: str) -> str:
         return raw
     path = p.path or ""
     return f"https://m.mashina.kg{path}"
+
+
+def _is_small_variant(url: str) -> bool:
+    m = _MASHINA_DIM_RE.search(url)
+    if not m:
+        return False
+    try:
+        w = int(m.group(1))
+        h = int(m.group(2))
+    except (TypeError, ValueError):
+        return False
+    return w <= 220 and h <= 220
+
+
+def _variant_key(url: str) -> str:
+    return _MASHINA_SIZE_TOKEN_RE.sub("", url)
+
+
+def _variant_area(url: str) -> int:
+    m = _MASHINA_DIM_RE.search(url)
+    if not m:
+        return 0
+    try:
+        return int(m.group(1)) * int(m.group(2))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_gallery_urls_from_html(html: str, *, limit: int = 24) -> list[str]:
+    """Mashina detail fallback: gather listing gallery URLs directly from raw HTML."""
+    ordered_keys: list[str] = []
+    best_by_key: dict[str, tuple[str, int]] = {}
+    for u in _MASHINA_TACHKA_URL_RE.findall(html or ""):
+        low = u.lower()
+        if "/tachka/images//users/" in low or "/tachka/images/users/" in low:
+            continue
+        if "/tachka/images//banners/" in low or "/tachka/images/banners/" in low:
+            continue
+        if _is_small_variant(low):
+            continue
+        k = _variant_key(u)
+        area = _variant_area(u)
+        if k not in best_by_key:
+            ordered_keys.append(k)
+            best_by_key[k] = (u, area)
+        elif area > best_by_key[k][1]:
+            best_by_key[k] = (u, area)
+    out = [best_by_key[k][0] for k in ordered_keys]
+    if len(out) > limit:
+        out = out[:limit]
+    return out
 
 
 def _is_listing_details_url(url: str) -> bool:
@@ -344,6 +400,7 @@ class MashinaListingSource:
             )
 
             img_ld = EJ.images_from_json_ld(ld_blocks, limit=12)
+            img_html = _extract_gallery_urls_from_html(html, limit=24)
             img_dom = await C.collect_image_urls(
                 page,
                 ref.url,
@@ -351,12 +408,18 @@ class MashinaListingSource:
                 limit=12,
                 listing_path=urlparse(ref.url).path,
             )
-            image_urls = _merge_urls(img_ld, img_dom, 12)
+            image_urls = _merge_urls(img_html, img_ld, 24)
+            image_urls = _merge_urls(image_urls, img_dom, 24)
             trace_step(
                 trace,
                 step="detail_images",
                 expected="1+ картинок из LD или DOM",
-                got={"count": len(image_urls), "json_ld": len(img_ld), "dom": len(img_dom)},
+                got={
+                    "count": len(image_urls),
+                    "html": len(img_html),
+                    "json_ld": len(img_ld),
+                    "dom": len(img_dom),
+                },
                 ok=len(image_urls) > 0,
             )
         finally:
@@ -381,9 +444,10 @@ def _merge_urls(a: list[str], b: list[str], limit: int) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for u in a + b:
-        if u in seen:
+        key = _variant_key(u) if "tachka/images" in u.lower() else u
+        if key in seen:
             continue
-        seen.add(u)
+        seen.add(key)
         out.append(u)
         if len(out) >= limit:
             break

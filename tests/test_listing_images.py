@@ -42,3 +42,14 @@ def test_sanitize_drops_mashina_tiny_user_avatar() -> None:
     assert out == [
         "https://im.mashina.kg/tachka/images//e/a/b/eab3233d3a02dc6ee3460a2602b94da6_640x480.jpg"
     ]
+
+
+def test_sanitize_drops_non_tachka_mashina_assets() -> None:
+    out = sanitize_vehicle_image_urls(
+        [
+            "https://m.mashina.kg/images/header/banner.jpg",
+            "https://im.mashina.kg/tachka/images//1/2/3/abc_640x480.jpg",
+        ],
+        max_photos=6,
+    )
+    assert out == ["https://im.mashina.kg/tachka/images//1/2/3/abc_640x480.jpg"]

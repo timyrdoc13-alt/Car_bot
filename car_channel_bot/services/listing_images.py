@@ -63,7 +63,10 @@ def _is_likely_vehicle_photo_url(url: str) -> bool:
             return False
         return True
     if "mashina.kg" in low:
-        return _path_looks_like_photo(path) and "/bundles/" not in low
+        # Mashina UI may include non-listing images from same domain; keep only explicit photo paths.
+        return "/tachka/images" in low and not (
+            "/tachka/images//users/" in low or "/tachka/images/users/" in low
+        )
     # Прочие источники: только явные растровые расширения
     return _path_looks_like_photo(path)
 
